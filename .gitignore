@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+out/
+dist/
+build/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Cursor
+.cursor/
+
+# Electron-builder output
+release/
