@@ -10,6 +10,7 @@ import { useRenderModeStore } from "@/state/renderModeStore";
 import { usePaintedSceneStore } from "@/state/paintedSceneStore";
 import { useWeatherStore, DEFAULT_WEATHER } from "@/state/weatherStore";
 import { useBookmarkStore } from "@/state/bookmarkStore";
+import { useGeneratedObjectStore } from "@/state/generatedObjectStore";
 import { serializeProject, deserializeProject } from "@/utils/projectFile";
 import { useActionStore } from "@/state/exportStore";
 
@@ -23,6 +24,7 @@ const renderModeStoreModule = useRenderModeStore;
 const paintedSceneStoreModule = usePaintedSceneStore;
 const weatherStoreModule = useWeatherStore;
 const bookmarkStoreModule = useBookmarkStore;
+const generatedObjectStoreModule = useGeneratedObjectStore;
 
 interface ToolbarButtonProps {
   onClick: () => void;
@@ -160,6 +162,17 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
     // panel rather than residual state from the previous project.
     weatherStoreModule.getState().setAll(project.weather ?? DEFAULT_WEATHER);
     bookmarkStoreModule.getState().setSlots(project.moodBookmarks ?? [null, null, null]);
+    // v1.9 — restore generated 3D props. We adopt the file's projectId if
+    // one is stored so the scout3d-asset:// URLs continue to resolve to
+    // the same on-disk folder; otherwise the renderer's freshly-minted
+    // id is kept (mostly a non-issue for pre-v1.9 projects that have no
+    // generatedObjects yet).
+    if (project.projectId) {
+      projectStoreModule.getState().setProjectId(project.projectId);
+    }
+    generatedObjectStoreModule
+      .getState()
+      .setObjects(project.generatedObjects ?? []);
     projectStoreModule.getState().markSaved(result.filePath!);
     projectStoreModule.getState().setProjectName(project.name);
   };
@@ -177,9 +190,8 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
     };
   };
 
-  const handleSave = async () => {
-    if (!window.api) return;
-    const content = serializeProject(
+  const buildSerializedProject = () =>
+    serializeProject(
       projectName,
       center,
       areas,
@@ -194,8 +206,14 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
       paintedSkyStyleId,
       buildingsPaintedViews,
       buildWeatherSnapshot(),
-      bookmarkStoreModule.getState().slots
+      bookmarkStoreModule.getState().slots,
+      projectStoreModule.getState().projectId,
+      generatedObjectStoreModule.getState().objects
     );
+
+  const handleSave = async () => {
+    if (!window.api) return;
+    const content = buildSerializedProject();
 
     if (projectPath) {
       const result = await window.api.dialog.saveFile(projectPath, content);
@@ -207,23 +225,7 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
 
   const handleSaveAs = async () => {
     if (!window.api) return;
-    const content = serializeProject(
-      projectName,
-      center,
-      areas,
-      pins,
-      activeId,
-      sceneDate,
-      solarLightingEnabled,
-      renderMode,
-      paintedGroundTexture,
-      paintedStyleId,
-      paintedSkyTexture,
-      paintedSkyStyleId,
-      buildingsPaintedViews,
-      buildWeatherSnapshot(),
-      bookmarkStoreModule.getState().slots
-    );
+    const content = buildSerializedProject();
     const result = await window.api.dialog.saveFileAs(content);
     if (!result.canceled && result.filePath) {
       markSaved(result.filePath);
