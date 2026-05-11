@@ -1,7 +1,43 @@
 import { ipcMain, dialog, BrowserWindow } from "electron";
 import { readFileSync, writeFileSync } from "fs";
+import { meshGenerator, type GenerateArgs } from "./imageToMesh";
 
 export function registerIpcHandlers(): void {
+  // ─── Mesh generation (Stable-Fast-3D via local Python) ───────────────────
+
+  ipcMain.handle("mesh:checkInstall", async () => {
+    return meshGenerator.isInstalled();
+  });
+
+  // Forward Python progress + log events to the renderer that issued the
+  // request. We attach the listeners once and broadcast to every focused
+  // window — Scout3D only has one window today but this keeps us honest.
+  const broadcast = (channel: string, payload: unknown) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send(channel, payload);
+    }
+  };
+  meshGenerator.on("progress", (p) => broadcast("mesh:progress", p));
+  meshGenerator.on("log", (msg) => broadcast("mesh:log", msg));
+  meshGenerator.on("exit", (info) => broadcast("mesh:exit", info));
+
+  ipcMain.handle("mesh:generate", async (_event, args: GenerateArgs) => {
+    try {
+      const result = await meshGenerator.generate(args);
+      return { success: true as const, ...result };
+    } catch (error) {
+      return { success: false as const, error: String((error as Error).message ?? error) };
+    }
+  });
+
+  ipcMain.handle("mesh:cancel", async () => {
+    meshGenerator.cancel();
+    return { success: true as const };
+  });
+
+  // ─── Project file dialogs (existing) ─────────────────────────────────────
+
+
   // Open project file
   ipcMain.handle("dialog:openFile", async () => {
     const win = BrowserWindow.getFocusedWindow();

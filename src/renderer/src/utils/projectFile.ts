@@ -2,6 +2,7 @@ import { AnnotationPin } from "@/state/annotationStore";
 import { RenderMode } from "@/state/renderModeStore";
 import { WeatherSnapshot } from "@/state/weatherStore";
 import { MoodSnapshot } from "@/state/bookmarkStore";
+import { GeneratedObject } from "@/state/generatedObjectStore";
 
 export interface PaintedBuildingsView {
   imageDataUrl: string;
@@ -21,9 +22,12 @@ export interface PaintedBuildingsView {
  *   1.6 — single painted buildings view (legacy).
  *   1.7 — multi-view painted buildings.
  *   1.8 — adds weather snapshot + mood bookmark slots.
+ *   1.9 — adds projectId + AI-generated 3D props.
  */
-const CURRENT_VERSION = "1.8" as const;
-const KNOWN_VERSIONS = ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"] as const;
+const CURRENT_VERSION = "1.9" as const;
+const KNOWN_VERSIONS = [
+  "1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9",
+] as const;
 
 export interface ScoutProject {
   version: typeof CURRENT_VERSION | string;
@@ -57,6 +61,17 @@ export interface ScoutProject {
   weather?: WeatherSnapshot;
   /** Mood bookmark slots (length 3, null entries allowed) (v1.8). */
   moodBookmarks?: (MoodSnapshot | null)[];
+  /**
+   * Stable project identifier — used as the on-disk folder name for
+   * generated assets. Auto-generated on first save (v1.9).
+   */
+  projectId?: string;
+  /**
+   * AI-generated 3D props placed in the scene. Each entry references a
+   * GLB on disk via `glbUrl` ("scout3d-asset://<projectId>/...") and
+   * stores the placement transform (v1.9).
+   */
+  generatedObjects?: GeneratedObject[];
 }
 
 export function serializeProject(
@@ -74,7 +89,9 @@ export function serializeProject(
   paintedSkyStyleId?: string | null,
   paintedBuildingsViews?: PaintedBuildingsView[] | null,
   weather?: WeatherSnapshot | null,
-  moodBookmarks?: (MoodSnapshot | null)[] | null
+  moodBookmarks?: (MoodSnapshot | null)[] | null,
+  projectId?: string,
+  generatedObjects?: GeneratedObject[] | null
 ): string {
   const project: ScoutProject = {
     version: CURRENT_VERSION,
@@ -99,6 +116,11 @@ export function serializeProject(
     moodBookmarks:
       moodBookmarks && moodBookmarks.some((s) => s != null)
         ? moodBookmarks
+        : undefined,
+    projectId,
+    generatedObjects:
+      generatedObjects && generatedObjects.length > 0
+        ? generatedObjects
         : undefined,
   };
   return JSON.stringify(project, null, 2);

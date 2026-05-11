@@ -80,29 +80,83 @@ if [[ ! -x "${PY}" ]]; then
 fi
 
 say "Installing core dependencies (this is the long step — go get coffee)…"
-"${PIP}" install --upgrade pip wheel setuptools >/dev/null
+# Pin setuptools below 82 — torch's build pins setuptools<82 and a newer
+# version raises a dependency-resolver warning that pollutes the install
+# log. Pinning here is cosmetic but worth it.
+"${PIP}" install --upgrade pip wheel "setuptools<82" >/dev/null
 
-# Install PyTorch first (must come before sf3d's requirements so the MPS
-# wheel is the one resolved against the rest of the tree).
-"${PIP}" install --upgrade torch>=2.4 torchvision
+# 1. Torch first. Local C++ extensions (texture_baker, uv_unwrapper)
+#    import torch in their setup.py, so it must be importable before
+#    they get built. We resolve the MPS-capable wheel here.
+"${PIP}" install --upgrade "torch>=2.4" torchvision
 
-# SF3D core. Their requirements.txt builds a few CUDA-tagged wheels that
-# fall back to CPU/MPS gracefully — we don't pin them.
+# 2. Build the two in-tree C++ extensions WITH --no-build-isolation so
+#    they can see torch in our venv. PEP 517's isolated build would
+#    otherwise spin up a sandbox that hides torch and the build fails
+#    with "No module named 'torch'".
+say "Building SF3D C++ extensions (texture_baker, uv_unwrapper)…"
+(
+  cd "${SF3D_REPO}"
+  PYTORCH_ENABLE_MPS_FALLBACK=1 \
+    "${PIP}" install --no-build-isolation ./texture_baker ./uv_unwrapper
+)
+
+# 3. Now the rest of SF3D's requirements, with the two local entries
+#    stripped (already handled above). We rewrite to a temp file rather
+#    than touching the repo so a future `git pull` doesn't conflict.
+say "Installing the rest of the SF3D Python dependencies…"
+REQS_FILTERED="$(mktemp -t sf3d_reqs.XXXXXX)"
+grep -vE '^\s*\./(texture_baker|uv_unwrapper)/?\s*$' \
+  "${SF3D_REPO}/requirements.txt" > "${REQS_FILTERED}"
 PYTORCH_ENABLE_MPS_FALLBACK=1 \
-  "${PIP}" install -r "${SF3D_REPO}/requirements.txt"
+  "${PIP}" install -r "${REQS_FILTERED}"
+rm -f "${REQS_FILTERED}"
 
-# rembg ships its own ONNX runtime; SF3D's run.py uses it for background
-# removal. Optional but strongly recommended for previs prop quality.
-"${PIP}" install "rembg[cpu]==2.0.59" "onnxruntime>=1.17"
+# 4. onnxruntime is rembg's silent dependency on darwin; pin a modern
+#    version with MPS-friendly arm64 wheels.
+"${PIP}" install "onnxruntime>=1.17"
 
 # ─── 4. Pre-download SF3D weights ────────────────────────────────────────────
+#
+# stabilityai/stable-fast-3d is a gated HuggingFace repo. The user must
+# (a) accept the license once at https://huggingface.co/stabilityai/stable-fast-3d
+# and (b) be authenticated locally (`huggingface-cli login` or HF_TOKEN env).
+# We attempt the download here but soft-fail if auth is missing — sf3d_cli.py
+# will retry on first generate, so this step is purely optimistic warm-up.
 
 say "Pre-downloading SF3D weights from HuggingFace (~3 GB)…"
+set +e
 "${PY}" - <<'PY'
-from huggingface_hub import snapshot_download
-snapshot_download("stabilityai/stable-fast-3d", allow_patterns=["*.safetensors", "*.yaml", "*.json"])
-print("Weights cached.")
+import sys
+try:
+    from huggingface_hub import snapshot_download
+    snapshot_download(
+        "stabilityai/stable-fast-3d",
+        allow_patterns=["*.safetensors", "*.yaml", "*.json"],
+    )
+    print("Weights cached.")
+    sys.exit(0)
+except Exception as exc:
+    print(f"NOTE: weight pre-download skipped: {exc}", file=sys.stderr)
+    sys.exit(2)
 PY
+HF_RC=$?
+set -e
+
+if [[ ${HF_RC} -ne 0 ]]; then
+  warn "Weights were not downloaded. Most likely cause: SF3D is a gated"
+  warn "HuggingFace repo. To finish setup:"
+  echo "    1. Visit https://huggingface.co/stabilityai/stable-fast-3d and"
+  echo "       click 'Agree and access repository' (requires a free HF account)."
+  echo "    2. Create a read token at https://huggingface.co/settings/tokens"
+  echo "    3. Run: ${VENV}/bin/huggingface-cli login"
+  echo "       (or export HF_TOKEN=hf_… in your shell)"
+  echo "    4. Re-run this installer to fetch weights."
+  echo
+  echo "    The rest of the install is complete — you can run Scout3D's"
+  echo "    Generate-Prop modal once authentication is set up, and the"
+  echo "    weights will download lazily on the first generation."
+fi
 
 # ─── 5. Copy CLI server ──────────────────────────────────────────────────────
 

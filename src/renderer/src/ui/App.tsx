@@ -7,10 +7,12 @@ import { StyleSelector } from "@/components/StylePanel";
 import { RenderModeSelector } from "@/components/RenderModeSelector";
 import { PosePicker } from "@/components/PosePicker";
 import { RestyleModal } from "@/components/RestyleModal";
+import { GenerateObjectModal } from "@/components/GenerateObjectModal";
 import { PaintSceneButton } from "@/components/PaintSceneButton";
 import { PaintBuildingsButton } from "@/components/PaintBuildingsButton";
 import { PaintFlowOverlay } from "@/components/PaintFlowOverlay";
 import { ViewportAspectControl } from "@/components/ViewportAspectControl";
+import { GeneratedObjectToolbar } from "@/components/GeneratedObjectToolbar";
 import { ViewportHUD } from "@/components/ViewportHUD";
 import { LensDial } from "@/components/LensDial";
 import { ShutterButton } from "@/components/ShutterButton";
@@ -30,6 +32,7 @@ import { usePaintedSceneStore } from "@/state/paintedSceneStore";
 import { useViewportStore, ratioFor } from "@/state/viewportStore";
 import { useWeatherStore, DEFAULT_WEATHER } from "@/state/weatherStore";
 import { useBookmarkStore } from "@/state/bookmarkStore";
+import { useGeneratedObjectStore } from "@/state/generatedObjectStore";
 import { useCameraStore } from "@/state/cameraStore";
 import { useShutter } from "@/utils/useShutter";
 import { PinType } from "@/state/annotationStore";
@@ -48,9 +51,11 @@ import {
 function TopBar({
   onNew,
   onOpenRestyle,
+  onOpenGenerateObject,
 }: {
   onNew: () => void;
   onOpenRestyle: () => void;
+  onOpenGenerateObject: () => void;
 }) {
   const { thirdMode, firstPerson, setThirdMode, setFirstPerson } = useCarStore();
   const areas = useAreaStore((s) => s.areas);
@@ -153,6 +158,33 @@ function TopBar({
         >
           <Sparkles size={11} />
           AI Restyle
+        </button>
+
+        {/* Generate 3D Prop (local SF3D, places into scene) */}
+        <button
+          onClick={onOpenGenerateObject}
+          title="Generate a 3D prop from the current view or an image (local)"
+          css={css({
+            display: "flex",
+            alignItems: "center",
+            gap: "5px",
+            background: "linear-gradient(135deg, #22d3ee 0%, #3b82f6 100%)",
+            border: "none",
+            borderRadius: "6px",
+            padding: "5px 10px",
+            color: "#fff",
+            fontSize: "11px",
+            fontWeight: "600",
+            cursor: "pointer",
+            transition: "0.15s",
+            boxShadow: "0 0 0 0 rgba(34,211,238,0.0)",
+            ":hover": {
+              boxShadow: "0 2px 12px rgba(34,211,238,0.5)",
+            },
+          })}
+        >
+          <Box size={11} />
+          Generate Prop
         </button>
 
         {/* Paint Scene — applies AI texture to actual 3D ground */}
@@ -441,6 +473,7 @@ function ViewportFrame({
         <DriveHUD />
         <PaintFlowOverlay />
         <ViewportAspectControl />
+        <GeneratedObjectToolbar />
         <ViewportHUD />
 
         {/* Cinema-camera affordances. Each is `position: absolute`
@@ -490,7 +523,38 @@ function ViewportFrame({
             pin &nbsp;·&nbsp; <kbd css={kbdStyle}>ESC</kbd> to cancel
           </div>
         )}
+
+        {/* Pending generated-object placement overlay */}
+        <PendingObjectOverlay />
       </div>
+    </div>
+  );
+}
+
+function PendingObjectOverlay() {
+  const pendingGlbUrl = useGeneratedObjectStore((s) => s.pendingGlbUrl);
+  if (!pendingGlbUrl) return null;
+  return (
+    <div
+      css={css({
+        position: "absolute",
+        top: "16px",
+        left: "50%",
+        transform: "translateX(-50%)",
+        backgroundColor: "#17171af0",
+        backdropFilter: "blur(8px)",
+        border: "1px dashed #22d3ee88",
+        borderRadius: "8px",
+        padding: "8px 16px",
+        fontSize: "12px",
+        color: "#a0a0aa",
+        pointerEvents: "none",
+        zIndex: 50,
+      })}
+    >
+      Click anywhere in the scene to place your{" "}
+      <strong style={{ color: "#22d3ee" }}>generated prop</strong>{" "}
+      &nbsp;·&nbsp; <kbd css={kbdStyle}>ESC</kbd> to cancel
     </div>
   );
 }
@@ -508,6 +572,7 @@ export default function App() {
   const [shotsOpen, setShotsOpen] = useState(false);
   const [pendingPinType, setPendingPinType] = useState<PinType | null>(null);
   const [restyleOpen, setRestyleOpen] = useState(false);
+  const [generateObjectOpen, setGenerateObjectOpen] = useState(false);
 
   const clearAreas = useAreaStore((s) => s.clearAreas);
   const clearPins = useAnnotationStore((s) => s.clearPins);
@@ -544,6 +609,8 @@ export default function App() {
 
       if (e.key === "Escape") {
         setPendingPinType(null);
+        useGeneratedObjectStore.getState().setPending(null);
+        useGeneratedObjectStore.getState().selectObject(null);
         setSetupOpen(false);
         setShotsOpen(false);
         return;
@@ -594,6 +661,7 @@ export default function App() {
     resetWeather(DEFAULT_WEATHER);
     resetBookmarks([null, null, null]);
     setPendingPinType(null);
+    useGeneratedObjectStore.getState().clearObjects();
   }, [
     clearAreas,
     clearPins,
@@ -632,6 +700,7 @@ export default function App() {
       <TopBar
         onNew={handleNew}
         onOpenRestyle={() => setRestyleOpen(true)}
+        onOpenGenerateObject={() => setGenerateObjectOpen(true)}
       />
 
       {/* Main content area — single viewport, no flex columns. Drawers
@@ -659,6 +728,14 @@ export default function App() {
       <RestyleModal
         isOpen={restyleOpen}
         onClose={() => setRestyleOpen(false)}
+      />
+
+      {/* Generate 3D Prop modal — captures viewport / file, runs SF3D
+          locally via the main-process Python bridge, sets pendingGlbUrl
+          so the next scene click drops the prop in world space. */}
+      <GenerateObjectModal
+        isOpen={generateObjectOpen}
+        onClose={() => setGenerateObjectOpen(false)}
       />
     </div>
   );

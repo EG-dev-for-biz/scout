@@ -27,6 +27,8 @@ import { useCarStore } from "@/state/carStore";
 import { useCameraStore } from "@/state/cameraStore";
 import { usePoseStore } from "@/state/poseStore";
 import { useWeatherStore } from "@/state/weatherStore";
+import { useGeneratedObjectStore } from "@/state/generatedObjectStore";
+import { GeneratedObjects } from "./GeneratedObjects";
 import Car from "./Car";
 import instanceFleet from "@/api/axios";
 
@@ -458,6 +460,11 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
   const setLookAtTarget = usePoseStore((s) => s.setLookAtTarget);
   const setLookAtPickMode = usePoseStore((s) => s.setLookAtPickMode);
 
+  const pendingGlbUrl = useGeneratedObjectStore((s) => s.pendingGlbUrl);
+  const pendingMeta = useGeneratedObjectStore((s) => s.pendingMeta);
+  const addGeneratedObject = useGeneratedObjectStore((s) => s.addObject);
+  const setPendingObject = useGeneratedObjectStore((s) => s.setPending);
+
   const handleSceneClick = useCallback(
     (point: THREE.Vector3) => {
       // Mannequin look-at pick wins over focus + pin placement so the
@@ -476,6 +483,25 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
         setFocusPickMode(false);
         return;
       }
+      // Generated-prop placement consumes the click before pin placement,
+      // since pendingGlbUrl is only set by the GenerateObjectModal which is
+      // a deliberate, modal user gesture.
+      if (pendingGlbUrl) {
+        addGeneratedObject({
+          name: pendingMeta?.suggestedName ?? "AI Prop",
+          glbUrl: pendingGlbUrl,
+          position: { x: point.x, y: point.y, z: point.z },
+          rotation: { x: 0, y: 0, z: 0 },
+          // Default placement scale — SF3D output is unit-cube-ish; 5 m
+          // reads as a reasonable street-furniture / small-prop size in
+          // the photoreal tiles scene. User can re-scale after placement.
+          scale: 5,
+          sourceThumb: pendingMeta?.sourceThumb,
+        });
+        setPendingObject(null);
+        markDirty();
+        return;
+      }
       if (!pendingPinType) return;
       addPin({
         name: "",
@@ -491,7 +517,11 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
       lookAtPickMode,
       focusPickMode,
       pendingPinType,
+      pendingGlbUrl,
+      pendingMeta,
       addPin,
+      addGeneratedObject,
+      setPendingObject,
       markDirty,
       onPinPlaced,
       setFocusTarget,
@@ -502,7 +532,8 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
   );
 
   // Any pick mode wants pointer events on geometry so the click handler fires.
-  const wantsSceneClicks = pendingPinType || focusPickMode || lookAtPickMode;
+  const wantsSceneClicks =
+    pendingPinType || focusPickMode || lookAtPickMode || pendingGlbUrl;
 
   // Atmospheric rig + painted skybox are mutually exclusive:
   //   - Painted skybox is a stylized AI-generated dome; physical sky would
@@ -565,6 +596,9 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
       {pins.map((pin) => (
         <AnnotationPin key={pin.id} pin={pin} />
       ))}
+
+      {/* AI-generated 3D props placed by the user */}
+      <GeneratedObjects />
 
       <Car />
 
