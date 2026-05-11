@@ -17,11 +17,11 @@ import { GROUND_Y } from "./Space";
 import { MannequinPopup } from "@/components/MannequinPopup";
 
 // Vite serves this from src/renderer/public/models/.
-// character.fbx is a stock Mixamo character (rigged SkinnedMesh in
-// canonical Y-bind pose). Because the animation clips in /anim/ are also
-// Mixamo, source and target skeletons share bone names AND bind pose —
-// clips play directly via AnimationMixer with no retarget step.
-const MANNEQUIN_URL = "/models/character.fbx";
+// lily.fbx is a matched-set character: the rigged SkinnedMesh ships with
+// a companion animation library in /anim/ that was authored on the SAME
+// skeleton. Bone names AND bind pose match by construction, so clips play
+// directly via AnimationMixer with no retarget step.
+const MANNEQUIN_URL = "/models/lily.fbx";
 useFBX.preload(MANNEQUIN_URL);
 
 // Buffer between the mannequin's feet and the local ground origin so the
@@ -41,32 +41,31 @@ const ALL_POSE_IDS = [
 
 /**
  * Per-pose candidate filename basenames. The probe tries each variant in
- * order with both `.glb` and `.fbx` extensions so users can drop Mixamo
- * exports without renaming. First file that loads wins.
+ * order with both `.glb` and `.fbx` extensions so users can drop matched
+ * clip exports without renaming. First file that loads wins.
+ *
+ * Primary names match Lily's bundled animation library (now in /anim/).
+ * Secondary names are kept as fallbacks in case a future character pack
+ * uses Mixamo-style filenames (Running, Sitting, etc.).
  */
 const POSE_FILENAME_BASES: Record<string, string[]> = {
   idle: ["idle", "Idle"],
   walk: ["walk", "Walk", "Walking"],
-  jog: ["jog", "Jog", "Jogging", "JogForward", "Jog_Forward"],
-  run: ["run", "Run", "Running"],
-  sit: ["sit", "Sit", "Sitting", "SittingIdle"],
-  handsOnHips: [
-    "handsOnHips",
-    "HandsOnHips",
-    "HandsonHips",
-    "Hands_On_Hips",
-    "hands_on_hips",
+  run: ["run", "Run", "FastRun", "Fast_Run", "Running"],
+  jump: ["jump", "Jump"],
+  sit: ["sit", "Sit", "SittingIdle", "Sitting_Idle", "Sitting"],
+  layingPose: [
+    "layingPose",
+    "LayingPose",
+    "FemaleLayingPose",
+    "Female_Laying_Pose",
+    "Laying",
   ],
-  lookAround: ["lookAround", "LookAround", "Look_Around", "looking_around"],
-  phone: ["phone", "Phone", "PhoneCall", "Phone_Call", "TalkingOnThePhone"],
-  talk: ["talk", "Talk", "Talking"],
-  crouch: ["crouch", "Crouch", "Crouching", "CrouchIdle"],
-  leanWall: ["leanWall", "LeanWall", "Leaning", "Lean", "LeaningAgainstWall"],
-  walkCircle: [
-    "walkCircle",
-    "WalkCircle",
-    "WalkingInCircle",
-    "Walking_In_Circle",
+  layingPose2: [
+    "layingPose2",
+    "LayingPose2",
+    "FemaleLayingPose2",
+    "Female_Laying_Pose_2",
   ],
 };
 
@@ -84,12 +83,13 @@ function buildCandidates(id: string): string[] {
 }
 
 // Locomotion velocity bands (m/s, against carStore's max ~6 m/s).
-// Anything below 0.1 → idle; below 2.5 → walk; below 4.5 → jog; else run.
+// Lily's library has no separate jog clip — FastRun covers everything
+// above walking pace, so the band is collapsed to a single threshold.
+// Anything below 0.1 → idle; below 3.5 → walk; else run.
 function locomotionForSpeed(speed: number): string {
   const s = Math.abs(speed);
   if (s < 0.1) return "idle";
-  if (s < 2.5) return "walk";
-  if (s < 4.5) return "jog";
+  if (s < 3.5) return "walk";
   return "run";
 }
 
@@ -165,6 +165,15 @@ function MannequinModel() {
     const c = SkeletonUtils.clone(fbx) as THREE.Object3D;
     let head: THREE.Bone | null = null;
     c.traverse((obj) => {
+      // Normalize Mixamo-style bone name variants so AnimationMixer can
+      // resolve clip tracks regardless of which export convention the
+      // source FBX used. "mixamorig:Hips" / "mixamorig_Hips" both
+      // collapse to the canonical "mixamorigHips" used by clip tracks.
+      if ((obj as THREE.Bone).isBone) {
+        obj.name = obj.name
+          .replace(/^mixamorig:/, "mixamorig")
+          .replace(/^mixamorig_/, "mixamorig");
+      }
       if ((obj as THREE.Mesh).isMesh) {
         const m = obj as THREE.Mesh;
         m.castShadow = true;

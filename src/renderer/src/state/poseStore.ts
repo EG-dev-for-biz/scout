@@ -1,16 +1,15 @@
 import { create } from "zustand";
 
 /**
- * Mannequin pose library. Each pose entry corresponds to a Mixamo clip
- * placed at `/anim/{id}.glb`. The user supplies these by downloading from
- * Mixamo (24 fps, GLB Binary, Without Skin, In Place) and dropping into
- * `src/renderer/public/anim/`. Anything missing simply doesn't show up in
- * the picker — the file probe is graceful.
+ * Mannequin pose library. Each pose entry corresponds to a clip file
+ * placed at `/anim/{id}.fbx` (or `.glb`). Files are loaded with a
+ * tolerant filename probe (see `POSE_FILENAME_BASES` in Car.tsx), so
+ * authoring conventions don't matter — anything missing simply doesn't
+ * show up in the picker.
  *
- * Locomotion (`idle`, `walk`, `jog`, `run`) is reserved for drive-mode
- * auto-playback driven by `carStore.velocityNorm`. Anything else is a
- * "pose" the user can select while NOT in drive mode to position the
- * mannequin as a human-scale prop for shot composition.
+ * The current library is Lily's matched-set animations. Locomotion
+ * (`idle`, `walk`, `run`) is auto-driven by `carStore.velocityMS` in
+ * drive mode; outside drive mode the user-selected `activePose` plays.
  */
 
 export interface PoseEntry {
@@ -21,43 +20,28 @@ export interface PoseEntry {
 }
 
 export const LOCOMOTION_POSES: PoseEntry[] = [
-  { id: "idle", label: "Idle", category: "locomotion", description: "Standing still" },
+  { id: "idle", label: "Idle", category: "locomotion", description: "Standing still, arms relaxed" },
   { id: "walk", label: "Walk", category: "locomotion", description: "Walking forward" },
-  { id: "jog", label: "Jog", category: "locomotion", description: "Light jog" },
-  { id: "run", label: "Run", category: "locomotion", description: "Running" },
+  { id: "run", label: "Run", category: "locomotion", description: "Running pace" },
 ];
 
 export const SCOUT_POSES: PoseEntry[] = [
-  { id: "sit", label: "Sit", category: "scout", description: "Sitting on bench / curb" },
-  {
-    id: "handsOnHips",
-    label: "Hands on Hips",
-    category: "scout",
-    description: "Relaxed standing",
-  },
-  {
-    id: "lookAround",
-    label: "Look Around",
-    category: "scout",
-    description: "Head scan, eye-level",
-  },
-  { id: "phone", label: "Phone Call", category: "scout", description: "On the phone" },
+  { id: "sit", label: "Sit", category: "scout", description: "Sitting idle" },
+  { id: "jump", label: "Jump", category: "scout", description: "Vertical jump" },
 ];
 
 export const EXTRA_POSES: PoseEntry[] = [
-  { id: "talk", label: "Talking", category: "extra", description: "Gesture-heavy idle" },
-  { id: "crouch", label: "Crouching", category: "extra", description: "Low subject" },
   {
-    id: "leanWall",
-    label: "Leaning Wall",
+    id: "layingPose",
+    label: "Laying",
     category: "extra",
-    description: "Leaning against a wall",
+    description: "Laying / reclining",
   },
   {
-    id: "walkCircle",
-    label: "Walk Circle",
+    id: "layingPose2",
+    label: "Laying Alt",
     category: "extra",
-    description: "Curved walk path",
+    description: "Alternate laying pose",
   },
 ];
 
