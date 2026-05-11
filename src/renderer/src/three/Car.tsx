@@ -132,6 +132,18 @@ interface ProbedClip {
 function useProbedClip(id: string): ProbedClip | null {
   const candidates = React.useMemo(() => buildCandidates(id), [id]);
   const result = useOptionalGLTF(candidates);
+  // Tag the probe outcome once per resolve so we can see in DevTools why
+  // a pose might not show up in the picker.
+  React.useEffect(() => {
+    if (result == null) {
+      console.log(`[Mannequin] probe "${id}": no candidate loaded`);
+    } else {
+      console.log(
+        `[Mannequin] probe "${id}": loaded (${result.format}), ` +
+          `${result.animations.length} clip(s)`
+      );
+    }
+  }, [id, result]);
   if (!result || result.animations.length === 0) return null;
   return {
     id,
@@ -142,9 +154,10 @@ function useProbedClip(id: string): ProbedClip | null {
 }
 
 /**
- * Find the first SkinnedMesh in a subtree. Both the cloned sb_mannequin
- * and the FBX-loaded source scenes have a single SkinnedMesh hanging off
- * a Group root, so a depth-first walk to the first match is sufficient.
+ * Find the first SkinnedMesh in a subtree. The cloned sb_mannequin always
+ * has one (it's a full character). The FBX-loaded source scenes have one
+ * only when exported "With Skin" — Mixamo "Without Skin" exports contain
+ * loose Bone nodes and an embedded animation but no mesh.
  */
 function findSkinnedMesh(root: THREE.Object3D): THREE.SkinnedMesh | null {
   let found: THREE.SkinnedMesh | null = null;
@@ -154,6 +167,21 @@ function findSkinnedMesh(root: THREE.Object3D): THREE.SkinnedMesh | null {
     }
   });
   return found;
+}
+
+/**
+ * Build a Skeleton from every Bone object in a subtree. Used as a fallback
+ * when an FBX clip was exported "Without Skin" (no SkinnedMesh present) —
+ * the bone hierarchy still exists in the scene graph and is enough for
+ * SkeletonUtils.retargetClip to play the source animation against.
+ */
+function buildSkeletonFromScene(root: THREE.Object3D): THREE.Skeleton | null {
+  const bones: THREE.Bone[] = [];
+  root.traverse((obj) => {
+    if ((obj as THREE.Bone).isBone) bones.push(obj as THREE.Bone);
+  });
+  if (bones.length === 0) return null;
+  return new THREE.Skeleton(bones);
 }
 
 function MannequinModel() {
@@ -208,12 +236,23 @@ function MannequinModel() {
     if (!targetMesh) return probedClips.map(() => null);
     return probedClips.map((p) => {
       if (!p) return null;
+      // Mixamo "With Skin" FBX → SkinnedMesh in the loaded scene.
+      // Mixamo "Without Skin" FBX → only loose Bone nodes; build a
+      // synthetic Skeleton over them so retargetClip has somewhere to
+      // play the source animation.
       const sourceMesh = findSkinnedMesh(p.sourceScene);
-      if (!sourceMesh) return null;
+      const source: THREE.SkinnedMesh | THREE.Skeleton | null =
+        sourceMesh ?? buildSkeletonFromScene(p.sourceScene);
+      if (!source) {
+        console.warn(
+          `[Mannequin] no skeleton found in source for "${p.id}" — skipped`
+        );
+        return null;
+      }
       try {
         const retargeted = SkeletonUtils.retargetClip(
           targetMesh,
-          sourceMesh,
+          source,
           p.sourceClip,
           {
             // Hip bone identifier — retargetClip needs this hint to
@@ -231,6 +270,9 @@ function MannequinModel() {
         // our skeleton regardless of the source's hip height.
         retargeted.tracks = retargeted.tracks.filter(
           (t) => t.name !== "mixamorigHips.position"
+        );
+        console.log(
+          `[Mannequin] retargeted "${p.id}" (${retargeted.tracks.length} tracks)`
         );
         return { id: p.id, clip: retargeted };
       } catch (err) {
