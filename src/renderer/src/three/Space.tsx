@@ -28,6 +28,16 @@ import instanceFleet from "@/api/axios";
 
 const scale = 51000;
 
+/**
+ * Shared ground reference in world Y. All foreground geometry (satellite
+ * texture plane, OSM building bases, roads, click-target plane, mannequin
+ * feet) anchors to this Y so they stay coplanar. Adjusting this single
+ * value re-grounds the entire OSM scene.
+ *
+ * Also exported so Car.tsx can place the mannequin on the same surface.
+ */
+export const GROUND_Y = -1.3;
+
 // ---------------------------------------------------------------------------
 // Building mesh
 // ---------------------------------------------------------------------------
@@ -104,6 +114,9 @@ function Building({
         }
       }}
       rotation={[-Math.PI / 2, 0, 0]}
+      // Building bases sit on the shared ground reference so they stay
+      // coplanar with the satellite texture, roads, and the mannequin.
+      position={[0, GROUND_Y, 0]}
       // No-op when the Canvas shadows pass is off (legacy mode). When the
       // AtmosphericRig is active, its SunLight casts hard shadows from the
       // building extrusions onto the satellite ground and other buildings.
@@ -179,7 +192,9 @@ function Roads({ area }: { area: any }) {
         if (!road.geometry || road.geometry.length < 2) return null;
         const pts = road.geometry.map((pt: any) => {
           const v = project(pt.lat, pt.lon);
-          return new THREE.Vector3(v.x, 0.1, -v.y);
+          // Roads sit 10 cm above the shared ground plane so they read as
+          // an overlay on the satellite imagery, not z-fight with it.
+          return new THREE.Vector3(v.x, GROUND_Y + 0.1, -v.y);
         });
         return <Line key={i} points={pts} color="#22c55e" lineWidth={1} />;
       })}
@@ -196,7 +211,9 @@ function GroundPlane({ onSceneClick }: { onSceneClick?: (point: THREE.Vector3) =
   return (
     <mesh
       rotation={[-Math.PI / 2, 0, 0]}
-      position={[0, -0.01, 0]}
+      // Click target sits 1 cm below the satellite texture so pin
+      // placement raycasts hit it after passing through visible geometry.
+      position={[0, GROUND_Y - 0.01, 0]}
       onClick={(e) => {
         e.stopPropagation();
         onSceneClick(e.point.clone());
@@ -466,16 +483,26 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
   // Lights / sky / fog / post-process differ; geometry does not.
   const sceneContent = (
     <>
-      {/* World floor — only in OSM mode (photoreal includes terrain). */}
+      {/* World floor — only in OSM mode (photoreal includes terrain). Sits
+          ~70 cm below the satellite plane as a dark backstop when the
+          camera tilts under the horizon. */}
       {showSatelliteGround && (
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -2, 0]} receiveShadow>
+        <mesh
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[0, GROUND_Y - 0.7, 0]}
+          receiveShadow
+        >
           <planeGeometry args={[50000, 50000]} />
           <meshStandardMaterial color="#0a0a0c" roughness={1} metalness={0} />
         </mesh>
       )}
 
-      {/* Satellite ground — shown only in OSM mode (photoreal includes ground). */}
-      {showSatelliteGround && realCenter && <SatelliteGround center={realCenter} />}
+      {/* Satellite ground — shown only in OSM mode (photoreal includes ground).
+          Anchored to GROUND_Y so building bases, roads, and the mannequin
+          all share the same vertical reference. */}
+      {showSatelliteGround && realCenter && (
+        <SatelliteGround center={realCenter} yOffset={GROUND_Y} />
+      )}
 
       {/* Photoreal Google 3D Tiles */}
       {showPhotoreal && realCenter && <PhotorealTiles center={realCenter} />}

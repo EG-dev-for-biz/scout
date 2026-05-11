@@ -1,12 +1,88 @@
-import React, { useRef, useEffect, useCallback } from "react";
+import React, { useRef, useEffect, useCallback, Suspense } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
+import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { useCarStore } from "@/state/carStore";
 import { useAnnotationStore } from "@/state/annotationStore";
 import { useProjectStore } from "@/state/projectStore";
+import { GROUND_Y } from "./Space";
+
+// Vite serves this from src/renderer/public/models/.
+const MANNEQUIN_URL = "/models/sb_mannequin.glb";
+useGLTF.preload(MANNEQUIN_URL);
+
+/**
+ * The player avatar used in drive/walk mode. Renders a humanoid mannequin
+ * (scratchbox sb_mannequin) instead of the original orange placeholder box.
+ * Movement controls and camera-follow logic are unchanged — only the
+ * visual + the human-scale camera offsets are different.
+ */
+// sb_mannequin.glb is a Mixamo-style rigged skinned mesh. Inspection of the
+// GLB's POSITION accessor shows feet at local y = -1.30 m, head top at
+// y = +0.42 m, with the model origin sitting near the top of the head.
+// Using Box3.setFromObject on a freshly cloned SkinnedMesh returns empty
+// bounds before the skeleton has been updated, so the dynamic-bbox approach
+// can silently leave the model embedded in the ground. Hardcoding the
+// known feet offset is more reliable for this specific asset.
+const MANNEQUIN_FEET_LOCAL_Y = -1.3;
+const MANNEQUIN_GROUND_BUFFER = 0.05; // 5 cm above the satellite texture
+
+function MannequinModel() {
+  const { scene } = useGLTF(MANNEQUIN_URL);
+  // useGLTF caches the result globally; clone so multiple instances would
+  // each have their own transform graph. Also flag every mesh for shadow
+  // casting/receiving so atmospheric SunLight + MoonLight produce a visible
+  // shadow under the mannequin on the satellite ground plane.
+  const cloned = React.useMemo(() => {
+    const c = scene.clone(true);
+    c.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        const m = obj as THREE.Mesh;
+        m.castShadow = true;
+        m.receiveShadow = true;
+      }
+    });
+    return c;
+  }, [scene]);
+
+  // Lift the inner primitive so the model's feet (at local y = -1.30) land
+  // 5 cm above the group's local origin (which sits on the ground plane).
+  const footLift = -MANNEQUIN_FEET_LOCAL_Y + MANNEQUIN_GROUND_BUFFER;
+
+  // One-shot probe: after the SkinnedMesh's first render, read its actual
+  // world-space bounding box so we can verify feet/head heights against
+  // the satellite plane (y=0). Logs once per scene load.
+  const primRef = React.useRef<THREE.Object3D>(null);
+  React.useEffect(() => {
+    const t = setTimeout(() => {
+      if (!primRef.current) return;
+      primRef.current.updateMatrixWorld(true);
+      const wb = new THREE.Box3().setFromObject(primRef.current);
+      console.log(
+        "[Mannequin] world bbox y =",
+        wb.min.y.toFixed(3),
+        "→",
+        wb.max.y.toFixed(3),
+        " (satellite plane is at y=0)"
+      );
+    }, 200);
+    return () => clearTimeout(t);
+  }, [cloned]);
+
+  // Mannequin is authored facing +Z; rotate 180° so it faces the same way
+  // our control logic expects (forward = -Z).
+  return (
+    <primitive
+      ref={primRef}
+      object={cloned}
+      position={[0, footLift, 0]}
+      rotation={[0, Math.PI, 0]}
+    />
+  );
+}
 
 const Car = () => {
-  const carRef = useRef<THREE.Mesh>(null);
+  const carRef = useRef<THREE.Group>(null);
   const { camera } = useThree();
   const { thirdMode, firstPerson, setThirdMode, setFirstPerson } = useCarStore();
   const addPin = useAnnotationStore((s) => s.addPin);
@@ -119,10 +195,11 @@ const Car = () => {
   useFrame((_state, delta) => {
     if (!carRef.current) return;
 
-    // Movement
-    const accelerationRate = 0.2;
-    const maxSpeed = 3.0;
-    const decelerationRate = 1.0;
+    // Movement (per-frame displacement). Tuned for human-scale: roughly
+    // 6 m/s top speed (jogging pace) when delta = 1/60, with quick stop.
+    const accelerationRate = 0.5;
+    const maxSpeed = 6.0;
+    const decelerationRate = 2.5;
 
     if (keys.current.w) {
       velocity.current = Math.min(maxSpeed, velocity.current + accelerationRate * delta);
@@ -148,31 +225,41 @@ const Car = () => {
     const carPos = carRef.current.position;
 
     if (firstPerson) {
-      // Eye-level camera locked to car's heading
-      const eyeOffset = new THREE.Vector3(0, 0.25, 0.05);
+      // Eye level: ~1.6m above the mannequin's feet. The carRef sits with
+      // its origin at the mannequin's feet so this is direct world Y.
+      const eyeOffset = new THREE.Vector3(0, 1.6, 0.1);
       eyeOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), carRef.current.rotation.y);
       camera.position.lerp(carPos.clone().add(eyeOffset), 0.2);
       const lookTarget = carPos.clone().add(
-        new THREE.Vector3(0, 0.25, -2).applyAxisAngle(
+        new THREE.Vector3(0, 1.6, -4).applyAxisAngle(
           new THREE.Vector3(0, 1, 0),
           carRef.current.rotation.y
         )
       );
       camera.lookAt(lookTarget);
     } else {
-      // Third-person: behind and above
-      const offset = new THREE.Vector3(0, 1, 2);
+      // Third-person follow-cam: 1.5m up and 3m behind the mannequin's
+      // shoulder, looking down at chest height.
+      const offset = new THREE.Vector3(0, 1.5, 3);
       offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), carRef.current.rotation.y);
       camera.position.lerp(carPos.clone().add(offset), 0.1);
-      camera.lookAt(carPos);
+      const lookHeight = new THREE.Vector3(0, 1.2, 0);
+      camera.lookAt(carPos.clone().add(lookHeight));
     }
   });
 
   return (
-    <mesh ref={carRef} position={[0, 0.1, 0]}>
-      <boxGeometry args={[0.3, 0.15, 0.5]} />
-      <meshStandardMaterial color="#f97316" />
-    </mesh>
+    // Outer group sits ON the shared ground reference so the mannequin's
+    // feet (lifted internally by MannequinModel) land 5 cm above the
+    // satellite plane regardless of the GROUND_Y value.
+    // Note: camera-follow offsets in useFrame() are RELATIVE to this group,
+    // so first-person eye-height (1.6 m above the group origin) and
+    // third-person height (1.5 m above) automatically track GROUND_Y too.
+    <group ref={carRef} position={[0, GROUND_Y, 0]}>
+      <Suspense fallback={null}>
+        <MannequinModel />
+      </Suspense>
+    </group>
   );
 };
 
