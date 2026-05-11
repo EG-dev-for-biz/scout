@@ -17,11 +17,12 @@ import { GROUND_Y } from "./Space";
 import { MannequinPopup } from "@/components/MannequinPopup";
 
 // Vite serves this from src/renderer/public/models/.
-// lily.fbx is a matched-set character: the rigged SkinnedMesh ships with
-// a companion animation library in /anim/ that was authored on the SAME
-// skeleton. Bone names AND bind pose match by construction, so clips play
-// directly via AnimationMixer with no retarget step.
-const MANNEQUIN_URL = "/models/lily.fbx";
+// mannequin.fbx is the masculine art-mannequin (rigged SkinnedMesh with
+// an embedded 1024px white texture). The clip library in /anim/ was
+// originally authored on Lily's skeleton; the bone-name normalization
+// inside MannequinModel handles any mixamorig: / mixamorig_ variants,
+// and the bounding-box scale normalization handles cm-vs-m exports.
+const MANNEQUIN_URL = "/models/mannequin.fbx";
 useFBX.preload(MANNEQUIN_URL);
 
 // Buffer between the mannequin's feet and the local ground origin so the
