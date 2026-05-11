@@ -78,14 +78,39 @@ type PoseStore = {
    * once the probes resolve.
    */
   availableIds: string[];
+  /**
+   * Whether the user has clicked the mannequin to select it. When true a
+   * floating popup appears next to the head with contextual controls
+   * (pose, look-at, etc.).
+   */
+  selected: boolean;
+  /**
+   * World-space point the head bone should face. When set, the head
+   * orientation overrides the active animation's head channel each frame.
+   */
+  lookAtTarget: [number, number, number] | null;
+  /**
+   * When true, the next scene click sets `lookAtTarget` instead of placing
+   * a pin or changing focus. Auto-cleared after a successful pick.
+   */
+  lookAtPickMode: boolean;
 
   setActivePose: (id: string) => void;
   setAvailableIds: (ids: string[]) => void;
+  setSelected: (v: boolean) => void;
+  setLookAtTarget: (t: [number, number, number] | null) => void;
+  setLookAtPickMode: (v: boolean) => void;
 };
 
 export const usePoseStore = create<PoseStore>((set) => ({
   activePose: "idle",
   availableIds: [],
+  selected: false,
+  lookAtTarget: null,
+  lookAtPickMode: false,
   setActivePose: (activePose) => set({ activePose }),
   setAvailableIds: (availableIds) => set({ availableIds }),
+  setSelected: (selected) => set({ selected }),
+  setLookAtTarget: (lookAtTarget) => set({ lookAtTarget }),
+  setLookAtPickMode: (lookAtPickMode) => set({ lookAtPickMode }),
 }));

@@ -14,6 +14,7 @@ import {
 } from "@/state/poseStore";
 import { useOptionalGLTF } from "./useOptionalGLTF";
 import { GROUND_Y } from "./Space";
+import { MannequinPopup } from "@/components/MannequinPopup";
 
 // Vite serves this from src/renderer/public/models/.
 const MANNEQUIN_URL = "/models/sb_mannequin.glb";
@@ -27,12 +28,56 @@ const MANNEQUIN_FEET_LOCAL_Y = -1.3;
 const MANNEQUIN_GROUND_BUFFER = 0.05;
 
 // All pose ids we'll probe. Locomotion is auto-driven by velocity; the rest
-// are user-selectable when not in drive mode. Each maps to /anim/{id}.glb.
+// are user-selectable when not in drive mode.
 const ALL_POSE_IDS = [
   ...LOCOMOTION_POSES.map((p) => p.id),
   ...SCOUT_POSES.map((p) => p.id),
   ...EXTRA_POSES.map((p) => p.id),
 ];
+
+/**
+ * Per-pose candidate filename basenames. The probe tries each variant in
+ * order with both `.glb` and `.fbx` extensions so users can drop Mixamo
+ * exports without renaming. First file that loads wins.
+ */
+const POSE_FILENAME_BASES: Record<string, string[]> = {
+  idle: ["idle", "Idle"],
+  walk: ["walk", "Walk", "Walking"],
+  jog: ["jog", "Jog", "Jogging", "JogForward", "Jog_Forward"],
+  run: ["run", "Run", "Running"],
+  sit: ["sit", "Sit", "Sitting", "SittingIdle"],
+  handsOnHips: [
+    "handsOnHips",
+    "HandsOnHips",
+    "HandsonHips",
+    "Hands_On_Hips",
+    "hands_on_hips",
+  ],
+  lookAround: ["lookAround", "LookAround", "Look_Around", "looking_around"],
+  phone: ["phone", "Phone", "PhoneCall", "Phone_Call", "TalkingOnThePhone"],
+  talk: ["talk", "Talk", "Talking"],
+  crouch: ["crouch", "Crouch", "Crouching", "CrouchIdle"],
+  leanWall: ["leanWall", "LeanWall", "Leaning", "Lean", "LeaningAgainstWall"],
+  walkCircle: [
+    "walkCircle",
+    "WalkCircle",
+    "WalkingInCircle",
+    "Walking_In_Circle",
+  ],
+};
+
+const EXTENSIONS = [".glb", ".fbx", ".gltf"];
+
+function buildCandidates(id: string): string[] {
+  const bases = POSE_FILENAME_BASES[id] ?? [id];
+  const urls: string[] = [];
+  for (const b of bases) {
+    for (const e of EXTENSIONS) {
+      urls.push(`/anim/${b}${e}`);
+    }
+  }
+  return urls;
+}
 
 // Locomotion velocity bands (m/s, against carStore's max ~6 m/s).
 // Anything below 0.1 → idle; below 2.5 → walk; below 4.5 → jog; else run.
@@ -44,23 +89,71 @@ function locomotionForSpeed(speed: number): string {
   return "run";
 }
 
+/**
+ * True if any AnimationAction is currently contributing (effective weight
+ * > 1%). Used so we only restore the head bone's bind-pose rotation when
+ * no clip is animating it — otherwise we'd fight the mixer.
+ */
+function someAnimationActive(
+  actions: Record<string, THREE.AnimationAction>
+): boolean {
+  for (const id of Object.keys(actions)) {
+    if (actions[id].getEffectiveWeight() > 0.01) return true;
+  }
+  return false;
+}
+
 interface LoadedClip {
   id: string;
   clip: THREE.AnimationClip;
 }
 
 /**
- * Probe a single pose GLB. Returns the renamed clip (so it can be addressed
- * by id) or null when the file is missing.
+ * Raw output from probing a pose's GLB/FBX file. The MannequinModel reads
+ * `sourceScene` to extract the SOURCE skeleton (Mixamo Y-Bot bind pose) and
+ * the `clip` to feed `SkeletonUtils.retargetClip`, which rewrites every
+ * track to match OUR sb_mannequin's SMPL-X bind pose. That fixes the
+ * crouched / arms-up artifact you get when Mixamo rotations are applied
+ * directly to a different-bind-pose skeleton.
  */
-function useProbedClip(id: string): LoadedClip | null {
-  const result = useOptionalGLTF(`/anim/${id}.glb`);
+interface ProbedClip {
+  id: string;
+  sourceScene: THREE.Object3D;
+  sourceClip: THREE.AnimationClip;
+  format: "glb" | "fbx" | "gltf";
+}
+
+/**
+ * Probe a single pose by trying multiple filename casings + extensions
+ * (.glb / .fbx / .gltf). Returns the loaded scene + first animation clip,
+ * or null when no candidate loaded successfully. Retargeting happens
+ * downstream in MannequinModel where we have the target skeleton.
+ */
+function useProbedClip(id: string): ProbedClip | null {
+  const candidates = React.useMemo(() => buildCandidates(id), [id]);
+  const result = useOptionalGLTF(candidates);
   if (!result || result.animations.length === 0) return null;
-  // Take the first clip from the file and rename it so the mixer can look
-  // it up by our internal id rather than the Mixamo export name.
-  const clip = result.animations[0].clone();
-  clip.name = id;
-  return { id, clip };
+  return {
+    id,
+    sourceScene: result.scene,
+    sourceClip: result.animations[0],
+    format: result.format,
+  };
+}
+
+/**
+ * Find the first SkinnedMesh in a subtree. Both the cloned sb_mannequin
+ * and the FBX-loaded source scenes have a single SkinnedMesh hanging off
+ * a Group root, so a depth-first walk to the first match is sufficient.
+ */
+function findSkinnedMesh(root: THREE.Object3D): THREE.SkinnedMesh | null {
+  let found: THREE.SkinnedMesh | null = null;
+  root.traverse((obj) => {
+    if (!found && (obj as THREE.SkinnedMesh).isSkinnedMesh) {
+      found = obj as THREE.SkinnedMesh;
+    }
+  });
+  return found;
 }
 
 function MannequinModel() {
@@ -70,8 +163,11 @@ function MannequinModel() {
   // the CLONED bones in this subtree, not the original cached scene's bones.
   // Plain Object3D.clone() leaves the SkinnedMesh referencing the original
   // skeleton — any animation applied to the cloned bones would be ignored.
-  const cloned = React.useMemo(() => {
+  // Also locate the head bone for look-at targeting and attach an outline
+  // helper for the selection visual.
+  const { cloned, headBone } = React.useMemo(() => {
     const c = SkeletonUtils.clone(scene);
+    let head: THREE.Bone | null = null;
     c.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         const m = obj as THREE.Mesh;
@@ -83,34 +179,89 @@ function MannequinModel() {
         // skipping culling has negligible perf cost.
         m.frustumCulled = false;
       }
+      if (obj.name === "mixamorigHead" && (obj as THREE.Bone).isBone) {
+        head = obj as THREE.Bone;
+      }
     });
-    return c;
+    return { cloned: c, headBone: head };
   }, [scene]);
 
   // Probe every potential clip file. Hooks-rules require fixed call order,
   // so we map over the static ALL_POSE_IDS list. Missing files return null
   // gracefully.
-  const loadedClips: (LoadedClip | null)[] = ALL_POSE_IDS.map((id) =>
+  const probedClips: (ProbedClip | null)[] = ALL_POSE_IDS.map((id) =>
     useProbedClip(id)
   );
 
-  // Push the available pose-ids to the store so the PosePicker UI can show
-  // only what actually loaded. Recompute only when the set changes.
-  const setAvailableIds = usePoseStore((s) => s.setAvailableIds);
-  const availableKey = loadedClips
+  // Retarget each probed clip from its source skeleton (the Mixamo Y-Bot
+  // bind pose embedded in the FBX/GLB) onto OUR sb_mannequin's SMPL-X bind
+  // pose. SkeletonUtils.retargetClip walks the clip frame-by-frame, plays
+  // it on the source skeleton, then samples each target bone's resulting
+  // local quaternion — so the output clip is authored in our bind frame.
+  // After retargeting we strip the hips position track (Mixamo's "In
+  // Place" workflow assumes the consumer ignores hip translation).
+  const availableKey = probedClips
     .map((c, i) => (c ? ALL_POSE_IDS[i] : ""))
     .join(",");
+  const loadedClips: (LoadedClip | null)[] = React.useMemo(() => {
+    const targetMesh = findSkinnedMesh(cloned);
+    if (!targetMesh) return probedClips.map(() => null);
+    return probedClips.map((p) => {
+      if (!p) return null;
+      const sourceMesh = findSkinnedMesh(p.sourceScene);
+      if (!sourceMesh) return null;
+      try {
+        const retargeted = SkeletonUtils.retargetClip(
+          targetMesh,
+          sourceMesh,
+          p.sourceClip,
+          {
+            // Hip bone identifier — retargetClip needs this hint to
+            // special-case the root joint's position tracks.
+            hip: "mixamorigHips",
+            // Hip position is relative to its first-frame value (so the
+            // mannequin doesn't teleport when a clip starts).
+            useFirstFramePosition: true,
+            // Sample at cinema rate to match the rest of the rig.
+            fps: 24,
+          } as Record<string, unknown>
+        );
+        retargeted.name = p.id;
+        // Drop hips position entirely so In-Place clips stay grounded on
+        // our skeleton regardless of the source's hip height.
+        retargeted.tracks = retargeted.tracks.filter(
+          (t) => t.name !== "mixamorigHips.position"
+        );
+        return { id: p.id, clip: retargeted };
+      } catch (err) {
+        console.warn(`[Mannequin] retarget failed for ${p.id}:`, err);
+        return null;
+      }
+    });
+  }, [cloned, availableKey]);
+
+  // Push the available pose-ids to the store so the PosePicker UI can show
+  // only what actually loaded + successfully retargeted.
+  const setAvailableIds = usePoseStore((s) => s.setAvailableIds);
   React.useEffect(() => {
-    const ids = loadedClips.filter((c): c is LoadedClip => c != null).map(
-      (c) => c.id
-    );
+    const ids = loadedClips
+      .filter((c): c is LoadedClip => c != null)
+      .map((c) => c.id);
     setAvailableIds(ids);
-  }, [availableKey, setAvailableIds]);
+  }, [availableKey, setAvailableIds, loadedClips]);
 
   // Build a single AnimationMixer for the cloned root + attach each loaded
   // clip as an AnimationAction we can fade in/out.
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionsRef = useRef<Record<string, THREE.AnimationAction>>({});
+  // Cache the head bone's bind-pose local rotation so we can restore it
+  // after the user clears their look-at target.
+  const headBindQuatRef = useRef<THREE.Quaternion | null>(null);
+  React.useEffect(() => {
+    if (headBone && !headBindQuatRef.current) {
+      headBindQuatRef.current = headBone.quaternion.clone();
+    }
+  }, [headBone]);
 
   React.useEffect(() => {
     const mixer = new THREE.AnimationMixer(cloned);
@@ -137,6 +288,7 @@ function MannequinModel() {
   const velocityMS = useCarStore((s) => s.velocityMS);
   const thirdMode = useCarStore((s) => s.thirdMode);
   const activePose = usePoseStore((s) => s.activePose);
+  const lookAtTarget = usePoseStore((s) => s.lookAtTarget);
 
   // Currently active clip id (the one fading to weight 1).
   const activeIdRef = useRef<string | null>(null);
@@ -168,6 +320,31 @@ function MannequinModel() {
     }
 
     activeIdRef.current = target;
+
+    // Head look-at: override the head bone's rotation AFTER mixer.update
+    // so the user's chosen gaze target wins over the animation's head
+    // channel. Three's Bone.lookAt() uses world matrices, so we need an
+    // up-to-date world transform first.
+    if (headBone) {
+      if (lookAtTarget) {
+        headBone.updateMatrixWorld(true);
+        headBone.lookAt(lookAtTarget[0], lookAtTarget[1], lookAtTarget[2]);
+        // Bone.lookAt() points the LOCAL -Z axis at the target, but the
+        // Mixamo head bone's intrinsic "face forward" is along local +Z
+        // (the +Z axis pokes out through the forehead). A 180° rotation
+        // around the bone's local Y axis swaps -Z and +Z, putting the
+        // face direction on the target.
+        headBone.rotateY(Math.PI);
+      } else if (
+        headBindQuatRef.current &&
+        // Restore the bind-pose head rotation when NO animation channel
+        // is driving the head — otherwise the mixer already overwrote
+        // headBone.quaternion this frame and our restore would fight it.
+        !someAnimationActive(actionsRef.current)
+      ) {
+        headBone.quaternion.copy(headBindQuatRef.current);
+      }
+    }
   });
 
   // Lift the inner primitive so the model's feet (at local y = -1.30) land
@@ -191,6 +368,8 @@ const Car = () => {
   const setVelocity = useCarStore((s) => s.setVelocity);
   const addPin = useAnnotationStore((s) => s.addPin);
   const markDirty = useProjectStore((s) => s.markDirty);
+  const selected = usePoseStore((s) => s.selected);
+  const setSelected = usePoseStore((s) => s.setSelected);
 
   const keys = useRef({ w: false, s: false, a: false, d: false });
   const velocity = useRef(0);
@@ -354,10 +533,22 @@ const Car = () => {
     // Outer group sits ON the shared ground reference so the mannequin's
     // feet (lifted internally by MannequinModel) land 5 cm above the
     // satellite plane regardless of the GROUND_Y value.
-    <group ref={carRef} position={[0, GROUND_Y, 0]}>
+    // Click toggles the selection state, which mounts <MannequinPopup />
+    // anchored near the head. Drive mode disables selection (the click
+    // would compete with mouselook).
+    <group
+      ref={carRef}
+      position={[0, GROUND_Y, 0]}
+      onClick={(e) => {
+        if (thirdMode) return;
+        e.stopPropagation();
+        setSelected(!selected);
+      }}
+    >
       <Suspense fallback={null}>
         <MannequinModel />
       </Suspense>
+      {selected && <MannequinPopup />}
     </group>
   );
 };

@@ -23,6 +23,7 @@ import { useProjectedBuildingMaterial } from "./ProjectedBuildingMaterial";
 import { usePaintedSceneStore } from "@/state/paintedSceneStore";
 import { useCarStore } from "@/state/carStore";
 import { useCameraStore } from "@/state/cameraStore";
+import { usePoseStore } from "@/state/poseStore";
 import Car from "./Car";
 import instanceFleet from "@/api/axios";
 
@@ -436,9 +437,20 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
   const focusPickMode = useCameraStore((s) => s.focusPickMode);
   const setFocusTarget = useCameraStore((s) => s.setFocusTarget);
   const setFocusPickMode = useCameraStore((s) => s.setFocusPickMode);
+  const lookAtPickMode = usePoseStore((s) => s.lookAtPickMode);
+  const setLookAtTarget = usePoseStore((s) => s.setLookAtTarget);
+  const setLookAtPickMode = usePoseStore((s) => s.setLookAtPickMode);
 
   const handleSceneClick = useCallback(
     (point: THREE.Vector3) => {
+      // Mannequin look-at pick wins over focus + pin placement so the
+      // user's most recent UI gesture (clicking "Look at..." in the popup)
+      // gets the next click.
+      if (lookAtPickMode) {
+        setLookAtTarget([point.x, point.y, point.z]);
+        setLookAtPickMode(false);
+        return;
+      }
       // Focus pick wins over pin placement when both modes happen to be
       // active. Sets the DoF target and auto-clears the pick state so the
       // next click goes back to normal scene interaction.
@@ -459,6 +471,7 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
       onPinPlaced?.();
     },
     [
+      lookAtPickMode,
       focusPickMode,
       pendingPinType,
       addPin,
@@ -466,11 +479,13 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
       onPinPlaced,
       setFocusTarget,
       setFocusPickMode,
+      setLookAtTarget,
+      setLookAtPickMode,
     ]
   );
 
-  // Either mode wants pointer events on geometry so the click handler fires.
-  const wantsSceneClicks = pendingPinType || focusPickMode;
+  // Any pick mode wants pointer events on geometry so the click handler fires.
+  const wantsSceneClicks = pendingPinType || focusPickMode || lookAtPickMode;
 
   // Atmospheric rig + painted skybox are mutually exclusive:
   //   - Painted skybox is a stylized AI-generated dome; physical sky would
