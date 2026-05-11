@@ -12,7 +12,7 @@ import {
   DepthOfField,
   Pixelation,
 } from "@react-three/postprocessing";
-import { BlendFunction, KernelSize, ToneMappingMode } from "postprocessing";
+import { BlendFunction, KernelSize, Resolution, ToneMappingMode } from "postprocessing";
 import type { LensFlareEffect } from "@takram/three-geospatial-effects";
 import { HalfFloatType, Matrix4, NoToneMapping, Vector2, Vector3 } from "three";
 import {
@@ -456,7 +456,7 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
           // can crank the internal Kawase pre-blur kernel up to HUGE — that
           // softens the flare from "stair-stepped block" into a cinematic
           // diffuse glow without losing intensity.
-          <LensFlare ref={lensFlareRef} resolutionScale={1.0} />
+          <LensFlare ref={lensFlareRef} resolution={Resolution.AUTO} />
         ) : (
           <></>
         )}
