@@ -287,7 +287,7 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
           buildings" not "looks like noon". */}
       <hemisphereLight
         args={["#3a4a6e", "#5a3a1e"]}
-        intensity={twilightAmount * 0.35}
+        intensity={twilightAmount * 0.6}
         position={[0, 1, 0]}
       />
 
