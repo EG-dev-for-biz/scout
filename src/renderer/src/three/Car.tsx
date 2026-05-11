@@ -6,6 +6,7 @@ import * as THREE from "three";
 import { useCarStore } from "@/state/carStore";
 import { useAnnotationStore } from "@/state/annotationStore";
 import { useProjectStore } from "@/state/projectStore";
+import { useCameraStore } from "@/state/cameraStore";
 import {
   usePoseStore,
   LOCOMOTION_POSES,
@@ -527,11 +528,37 @@ const Car = () => {
     // Click toggles the selection state, which mounts <MannequinPopup />
     // anchored near the head. Drive mode disables selection (the click
     // would compete with mouselook).
+    //
+    // PICK MODE HANDOFF: when the user is in the middle of picking a
+    // focus point or look-at target, clicking the mannequin should SET
+    // focus/gaze ON the mannequin's body — not toggle the popup. We do
+    // the store mutation directly here (with stopPropagation) instead
+    // of letting the click bubble, because the scene's onSceneClick
+    // path is only wired into Buildings and the GroundPlane — the
+    // mannequin lives in its own scene-graph branch and bubbling would
+    // just drop the click on the floor. Mannequin = best focus subject
+    // in a scout scene, so making it pickable matters.
     <group
       ref={carRef}
       position={[0, GROUND_Y, 0]}
       onClick={(e) => {
         if (thirdMode) return;
+        const cam = useCameraStore.getState();
+        const pose = usePoseStore.getState();
+        const hit: [number, number, number] = [e.point.x, e.point.y, e.point.z];
+
+        if (cam.focusPickMode) {
+          cam.setFocusTarget(hit);
+          cam.setFocusPickMode(false);
+          e.stopPropagation();
+          return;
+        }
+        if (pose.lookAtPickMode) {
+          pose.setLookAtTarget(hit);
+          pose.setLookAtPickMode(false);
+          e.stopPropagation();
+          return;
+        }
         e.stopPropagation();
         setSelected(!selected);
       }}

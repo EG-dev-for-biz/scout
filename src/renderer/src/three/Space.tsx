@@ -20,6 +20,7 @@ import { CameraController } from "./CameraController";
 import { PaintedSky } from "./PaintedSky";
 import { AtmosphericRig } from "./AtmosphericRig";
 import { Precipitation } from "./Precipitation";
+import { FocusTargetMarker } from "@/components/FocusReticle";
 import { useProjectedBuildingMaterial } from "./ProjectedBuildingMaterial";
 import { usePaintedSceneStore } from "@/state/paintedSceneStore";
 import { useCarStore } from "@/state/carStore";
@@ -572,6 +573,11 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
           Lives in shared sceneContent so it renders identically in both
           atmospheric and legacy paths. */}
       <Precipitation />
+
+      {/* Persistent focus-target reticle. Pinned at the DoF focus point
+          in world space; lives inside the Canvas so drei's <Html> can
+          project the position through the live camera matrix. */}
+      <FocusTargetMarker />
     </>
   );
 

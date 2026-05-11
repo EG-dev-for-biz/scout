@@ -1,33 +1,25 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { css } from "@emotion/react";
-import L from "leaflet";
 import { Space } from "@/three/Space";
 import { ProviderAttribution } from "@/three/SatelliteGround";
-import { MapComponent } from "@/components/map/SelectMap";
-import { BuildingHeights } from "@/components/map/Processing";
-import { AnnotationPanel, AnnotationToggleTab } from "@/components/AnnotationPanel";
 import { ProjectToolbar } from "@/components/ProjectToolbar";
 import { StyleSelector } from "@/components/StylePanel";
 import { RenderModeSelector } from "@/components/RenderModeSelector";
-import { CaptureShotButton } from "@/components/CaptureShotButton";
-import { LensPicker } from "@/components/LensPicker";
 import { PosePicker } from "@/components/PosePicker";
 import { RestyleModal } from "@/components/RestyleModal";
 import { PaintSceneButton } from "@/components/PaintSceneButton";
 import { PaintBuildingsButton } from "@/components/PaintBuildingsButton";
 import { PaintFlowOverlay } from "@/components/PaintFlowOverlay";
-import { LocationSearch } from "@/components/LocationSearch";
-import { TimeControls } from "@/components/TimeControls";
-import { WeatherControls } from "@/components/WeatherControls";
-import { MoodBookmarks } from "@/components/MoodBookmarks";
 import { ViewportAspectControl } from "@/components/ViewportAspectControl";
 import { ViewportHUD } from "@/components/ViewportHUD";
-import { Modal } from "@/components/modal/Modal";
-import { Column } from "@/components/flex/Column";
-import { Row } from "@/components/flex/Row";
-import { Title } from "@/components/text/Title";
-import { Description } from "@/components/text/Description";
-import { Button } from "@/components/button/BottomButton";
+import { LensDial } from "@/components/LensDial";
+import { ShutterButton } from "@/components/ShutterButton";
+import { SlateBurn } from "@/components/SlateBurn";
+import { Filmstrip } from "@/components/Filmstrip";
+import { ExposureMeter } from "@/components/ExposureMeter";
+import { FocusPickReticle } from "@/components/FocusReticle";
+import { SetupDrawer } from "@/components/SetupDrawer";
+import { ShotNotesDrawer } from "@/components/ShotNotesDrawer";
 import { useAreaStore } from "@/state/areaStore";
 import { useAnnotationStore } from "@/state/annotationStore";
 import { useProjectStore } from "@/state/projectStore";
@@ -38,15 +30,12 @@ import { usePaintedSceneStore } from "@/state/paintedSceneStore";
 import { useViewportStore, ratioFor } from "@/state/viewportStore";
 import { useWeatherStore, DEFAULT_WEATHER } from "@/state/weatherStore";
 import { useBookmarkStore } from "@/state/bookmarkStore";
+import { useCameraStore } from "@/state/cameraStore";
+import { useShutter } from "@/utils/useShutter";
 import { PinType } from "@/state/annotationStore";
 import {
-  Map,
   Box,
   Car,
-  ChevronLeft,
-  ChevronRight,
-  MapPin,
-  AlertTriangle,
   Eye,
   EyeOff,
   Sparkles,
@@ -57,17 +46,9 @@ import {
 // ---------------------------------------------------------------------------
 
 function TopBar({
-  leftPanelOpen,
-  onToggleLeft,
-  annotationPanelOpen,
-  onToggleAnnotations,
   onNew,
   onOpenRestyle,
 }: {
-  leftPanelOpen: boolean;
-  onToggleLeft: () => void;
-  annotationPanelOpen: boolean;
-  onToggleAnnotations: () => void;
   onNew: () => void;
   onOpenRestyle: () => void;
 }) {
@@ -133,7 +114,11 @@ function TopBar({
         <ProjectToolbar onNew={onNew} />
       </div>
 
-      {/* Right controls */}
+      {/* Right controls — kept minimal in the camera-body vocabulary.
+          Lens, capture, focus picker, and panels all live IN the
+          viewport now (LensDial, ShutterButton, drawers, FocusReticle).
+          Top bar holds project chrome, AI tools, render mode, and the
+          mannequin / drive shortcuts. */}
       <div
         css={css({
           display: "flex",
@@ -143,12 +128,6 @@ function TopBar({
           WebkitAppRegion: "no-drag" as any,
         })}
       >
-        {/* Lens picker — choose focal length, drives camera FOV */}
-        <LensPicker />
-
-        {/* Capture Shot button */}
-        <CaptureShotButton />
-
         {/* AI Restyle (single image preview) */}
         <button
           onClick={onOpenRestyle}
@@ -189,26 +168,6 @@ function TopBar({
 
         {/* Style selector dropdown */}
         <StyleSelector />
-
-        <TopBarDivider />
-
-        {/* Toggle left panel */}
-        <TopBarButton
-          onClick={onToggleLeft}
-          title={leftPanelOpen ? "Hide Map Panel" : "Show Map Panel"}
-          active={leftPanelOpen}
-        >
-          <Map size={13} />
-        </TopBarButton>
-
-        {/* Toggle annotations panel */}
-        <TopBarButton
-          onClick={onToggleAnnotations}
-          title={annotationPanelOpen ? "Hide Annotations" : "Show Annotations"}
-          active={annotationPanelOpen}
-        >
-          <MapPin size={13} />
-        </TopBarButton>
 
         {areas.length > 0 && (
           <>
@@ -350,265 +309,10 @@ function TopBarDivider() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Left Panel — Map + Processing
-// ---------------------------------------------------------------------------
-
-function LeftPanel({
-  isOpen,
-  onToggle,
-}: {
-  isOpen: boolean;
-  onToggle: () => void;
-}) {
-  const [areaData, setAreaData] = useState<any[]>([]);
-  const [warnOpen, setWarnOpen] = useState(false);
-  const [showProcessing, setShowProcessing] = useState(false);
-  const [flyToBounds, setFlyToBounds] = useState<any>(null);
-  const [prefilledBounds, setPrefilledBounds] = useState<any>(null);
-  const setCenter = useAreaStore((s) => s.setCenter);
-  const markDirty = useProjectStore((s) => s.markDirty);
-
-  const handleDone = (data: any[]) => {
-    setAreaData(data);
-    setCenter(data);
-    setShowProcessing(true);
-    markDirty();
-  };
-
-  const handleRemove = () => {
-    setAreaData([]);
-    setShowProcessing(false);
-    setFlyToBounds(null);
-    setPrefilledBounds(null);
-  };
-
-  const handleSearchPick = (
-    areaTuple: { lat: number; lng: number }[],
-    _result: any
-  ) => {
-    const ne = areaTuple[0];
-    const sw = areaTuple[1];
-    const bounds = new L.LatLngBounds([sw.lat, sw.lng], [ne.lat, ne.lng]);
-
-    setFlyToBounds(bounds);
-    setPrefilledBounds(bounds);
-    setAreaData(areaTuple);
-    setCenter(areaTuple);
-    setShowProcessing(true);
-    markDirty();
-  };
-
-  const checkIsBig = () => {
-    if (areaData.length < 2) return false;
-    const a = Math.abs(areaData[0].lat - areaData[1].lat);
-    const b = Math.abs(areaData[0].lng - areaData[1].lng);
-    return a + b > 0.1;
-  };
-
-  return (
-    <>
-      <div
-        css={css({
-          width: isOpen ? "320px" : "0",
-          flexShrink: 0,
-          transition: "width 0.25s ease",
-          overflow: "hidden",
-          display: "flex",
-          flexDirection: "column",
-          borderRight: "1px solid #2a2a2e",
-          backgroundColor: "#17171a",
-        })}
-      >
-        <div
-          css={css({
-            width: "320px",
-            height: "100%",
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-          })}
-        >
-          {/* Panel header */}
-          <div
-            css={css({
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              padding: "10px 14px",
-              borderBottom: "1px solid #2a2a2e",
-              flexShrink: 0,
-            })}
-          >
-            <div css={css({ display: "flex", alignItems: "center", gap: "6px" })}>
-              <Map size={13} color="#3b82f6" />
-              <span css={css({ fontSize: "12px", fontWeight: "600", color: "#e8e8ec" })}>
-                Location
-              </span>
-            </div>
-            <button
-              css={css({
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                color: "#6b6b78",
-                display: "flex",
-                ":hover": { color: "#e8e8ec" },
-              })}
-              onClick={onToggle}
-            >
-              <ChevronLeft size={14} />
-            </button>
-          </div>
-
-          {/* Search bar */}
-          <div
-            css={css({
-              padding: "10px 12px",
-              borderBottom: "1px solid #1e1e22",
-              flexShrink: 0,
-            })}
-          >
-            <LocationSearch onPick={handleSearchPick} />
-          </div>
-
-          {/* Leaflet map */}
-          <div css={css({ flex: "0 0 220px", position: "relative" })}>
-            <MapComponent
-              onDone={handleDone}
-              onRemove={handleRemove}
-              flyToBounds={flyToBounds}
-              prefilledBounds={prefilledBounds}
-            />
-          </div>
-
-          {/* Scrollable mid-section */}
-          <div css={css({ flex: 1, overflowY: "auto", overflowX: "hidden" })}>
-            {/* Processing section */}
-            {showProcessing && (
-              <div
-                css={css({
-                  padding: "14px",
-                  borderTop: "1px solid #2a2a2e",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "10px",
-                })}
-              >
-                <div>
-                  <div css={css({ fontSize: "12px", fontWeight: "600", color: "#e8e8ec", marginBottom: "4px" })}>
-                    Load Buildings
-                  </div>
-                  <div css={css({ fontSize: "11px", color: "#6b6b78", marginBottom: "8px" })}>
-                    Fetches OSM building footprints + road network for the selected area.
-                  </div>
-                  {checkIsBig() && (
-                    <div
-                      css={css({
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "6px",
-                        backgroundColor: "#f59e0b22",
-                        border: "1px solid #f59e0b44",
-                        borderRadius: "6px",
-                        padding: "6px 8px",
-                        fontSize: "11px",
-                        color: "#f59e0b",
-                        marginBottom: "8px",
-                      })}
-                    >
-                      <AlertTriangle size={11} />
-                      Large area selected — fetch may be slow.
-                    </div>
-                  )}
-                  <BuildingHeights area={areaData} />
-                </div>
-              </div>
-            )}
-
-            {!showProcessing && (
-              <div
-                css={css({
-                  padding: "20px",
-                  color: "#4a4a54",
-                  fontSize: "12px",
-                  textAlign: "center",
-                  lineHeight: "1.6",
-                })}
-              >
-                Draw a box or use the search above to pick a location.
-              </div>
-            )}
-          </div>
-
-          {/* Time / Sun / Weather / Mood controls — scrollable so the
-              stack can grow without pushing other panels off-screen. */}
-          <div
-            css={css({
-              padding: "12px",
-              borderTop: "1px solid #2a2a2e",
-              flex: "0 1 auto",
-              overflowY: "auto",
-              overflowX: "hidden",
-              display: "flex",
-              flexDirection: "column",
-              gap: "10px",
-              maxHeight: "62%",
-            })}
-          >
-            <TimeControls />
-            <WeatherControls />
-            <MoodBookmarks />
-          </div>
-        </div>
-      </div>
-
-      {/* Closed-state toggle tab */}
-      {!isOpen && (
-        <button
-          css={css({
-            position: "absolute",
-            left: 0,
-            top: "50%",
-            transform: "translateY(-50%)",
-            backgroundColor: "#17171a",
-            border: "1px solid #2a2a2e",
-            borderLeft: "none",
-            borderRadius: "0 6px 6px 0",
-            padding: "10px 6px",
-            cursor: "pointer",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: "4px",
-            zIndex: 10,
-            color: "#a0a0aa",
-            ":hover": { color: "#e8e8ec", backgroundColor: "#1e1e22" },
-          })}
-          onClick={onToggle}
-          title="Show Map Panel"
-        >
-          <ChevronRight size={14} />
-        </button>
-      )}
-
-      <Modal isOpen={warnOpen} onClose={() => setWarnOpen(false)}>
-        <Column gap="0.75rem">
-          <Title>Area is large</Title>
-          <Description>This may take a while to load. Proceed?</Description>
-          <Row gap="0.5rem">
-            <Button isShow={true} onClick={() => { setShowProcessing(true); setWarnOpen(false); }}>
-              Proceed
-            </Button>
-            <Button isShow={true} onClick={() => setWarnOpen(false)}>
-              Cancel
-            </Button>
-          </Row>
-        </Column>
-      </Modal>
-    </>
-  );
-}
+// LeftPanel removed — replaced by <SetupDrawer> in components/. The drawer
+// is an absolute overlay over the viewport instead of a flex-pushing column,
+// matching the Director's Viewfinder layout: maximize the viewport and
+// surface scene-setup controls as a side panel that swings out on demand.
 
 // ---------------------------------------------------------------------------
 // Drive-mode HUD overlay
@@ -666,12 +370,23 @@ const kbdStyle = css({
 function ViewportFrame({
   pendingPinType,
   onPinPlaced,
+  setupOpen,
+  shotsOpen,
+  onToggleSetup,
+  onToggleShots,
+  onRequestPin,
 }: {
   pendingPinType: PinType | null;
   onPinPlaced: () => void;
+  setupOpen: boolean;
+  shotsOpen: boolean;
+  onToggleSetup: () => void;
+  onToggleShots: () => void;
+  onRequestPin: (type: PinType) => void;
 }) {
   const aspectRatio = useViewportStore((s) => s.aspectRatio);
   const ratio = ratioFor(aspectRatio);
+  const innerFrameRef = useRef<HTMLDivElement | null>(null);
 
   // When constrained, the inner frame is sized via CSS aspect-ratio:
   // width tries 100%; if that would exceed container height, max-height clamps
@@ -703,6 +418,7 @@ function ViewportFrame({
       })}
     >
       <div
+        ref={innerFrameRef}
         css={[
           css({
             position: "relative",
@@ -717,12 +433,36 @@ function ViewportFrame({
           innerStyle,
         ]}
       >
+        {/* The 3D scene itself. */}
         <Space pendingPinType={pendingPinType} onPinPlaced={onPinPlaced} />
+
+        {/* Pre-existing overlays. */}
         <ProviderAttribution />
         <DriveHUD />
         <PaintFlowOverlay />
         <ViewportAspectControl />
         <ViewportHUD />
+
+        {/* Cinema-camera affordances. Each is `position: absolute`
+            relative to this inner frame. Order matters for click
+            targets; higher in the tree = lower z. */}
+        <LensDial />
+        <ExposureMeter />
+        <FocusPickReticle containerRef={innerFrameRef} />
+        <Filmstrip />
+        <ShutterButton />
+        <SlateBurn />
+
+        {/* Edge drawers slide in OVER the viewport. They're absolute
+            positioned relative to this same frame so they letterbox
+            cleanly with the chosen aspect ratio. */}
+        <SetupDrawer open={setupOpen} onToggle={onToggleSetup} />
+        <ShotNotesDrawer
+          open={shotsOpen}
+          onToggle={onToggleShots}
+          onRequestPin={onRequestPin}
+          onAutoOpen={onToggleShots}
+        />
 
         {/* Pending pin instruction overlay */}
         {pendingPinType && (
@@ -760,8 +500,12 @@ function ViewportFrame({
 // ---------------------------------------------------------------------------
 
 export default function App() {
-  const [leftOpen, setLeftOpen] = useState(true);
-  const [annotationOpen, setAnnotationOpen] = useState(false);
+  // Drawers start CLOSED — the cinema-camera Director's Viewfinder
+  // posture is "viewport first, panels second." User pulls the edge
+  // tabs when they need them; auto-open events (pin select, etc.) only
+  // bring them up at the right moment.
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [shotsOpen, setShotsOpen] = useState(false);
   const [pendingPinType, setPendingPinType] = useState<PinType | null>(null);
   const [restyleOpen, setRestyleOpen] = useState(false);
 
@@ -774,14 +518,71 @@ export default function App() {
   const resetWeather = useWeatherStore((s) => s.setAll);
   const resetBookmarks = useBookmarkStore((s) => s.setSlots);
 
-  // Cancel pending pin on Escape
+  // The shutter hook — shared by the ShutterButton inside the viewport
+  // AND by the SPACE keyboard binding here.
+  const fireShutter = useShutter();
+  const pins = useAnnotationStore((s) => s.pins);
+  const selectedPinId = useAnnotationStore((s) => s.selectedPinId);
+  const selectPin = useAnnotationStore((s) => s.selectPin);
+  const requestFraming = useCameraStore((s) => s.requestFraming);
+  const setThirdMode = useCarStore((s) => s.setThirdMode);
+
+  // Global keyboard. Implements:
+  //   - Escape       cancel pin placement, close any open drawer
+  //   - Space        fire shutter (when not typing in an input)
+  //   - [ / ]        step through filmstrip shots
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setPendingPinType(null);
+      // Ignore keystrokes targeted at input fields — the user is typing,
+      // not driving the camera HUD.
+      const target = e.target as HTMLElement;
+      const isInput =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+
+      if (e.key === "Escape") {
+        setPendingPinType(null);
+        setSetupOpen(false);
+        setShotsOpen(false);
+        return;
+      }
+
+      if (isInput) return;
+
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        fireShutter();
+        return;
+      }
+
+      // [ / ] navigate filmstrip — find current selected shot's index
+      // and step. Falls back to first / last if nothing selected.
+      if (e.key === "[" || e.key === "]") {
+        const shots = pins.filter((p) => p.type === "shot");
+        if (shots.length === 0) return;
+        let idx = shots.findIndex((p) => p.id === selectedPinId);
+        if (idx === -1) idx = e.key === "[" ? 0 : shots.length - 1;
+        else idx = e.key === "[" ? Math.max(0, idx - 1) : Math.min(shots.length - 1, idx + 1);
+        const pin = shots[idx];
+        if (pin?.camera) {
+          setThirdMode(false);
+          requestFraming(pin.camera);
+          selectPin(pin.id);
+        }
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [
+    fireShutter,
+    pins,
+    selectedPinId,
+    selectPin,
+    requestFraming,
+    setThirdMode,
+  ]);
 
   const handleNew = useCallback(() => {
     clearAreas();
@@ -806,8 +607,9 @@ export default function App() {
 
   const handleRequestPin = useCallback((type: PinType) => {
     setPendingPinType(type);
-    // Open annotations panel so user can see their pins
-    setAnnotationOpen(true);
+    // Pin placement implies the user wants to see the resulting pin in
+    // the shot-notes drawer.
+    setShotsOpen(true);
   }, []);
 
   const handlePinPlaced = useCallback(() => {
@@ -825,17 +627,15 @@ export default function App() {
         backgroundColor: "#0f0f11",
       })}
     >
-      {/* Top bar */}
+      {/* Top bar — slim, project + render mode + AI tools + drive only.
+          Lens, shutter, drawers all live inside the viewport. */}
       <TopBar
-        leftPanelOpen={leftOpen}
-        onToggleLeft={() => setLeftOpen((v) => !v)}
-        annotationPanelOpen={annotationOpen}
-        onToggleAnnotations={() => setAnnotationOpen((v) => !v)}
         onNew={handleNew}
         onOpenRestyle={() => setRestyleOpen(true)}
       />
 
-      {/* Main content area */}
+      {/* Main content area — single viewport, no flex columns. Drawers
+          are absolute overlays managed inside ViewportFrame. */}
       <div
         css={css({
           display: "flex",
@@ -844,26 +644,15 @@ export default function App() {
           position: "relative",
         })}
       >
-        {/* Left: map panel */}
-        <LeftPanel isOpen={leftOpen} onToggle={() => setLeftOpen((v) => !v)} />
-
-        {/* Center: 3D canvas with optional aspect-ratio letterbox */}
         <ViewportFrame
           pendingPinType={pendingPinType}
           onPinPlaced={handlePinPlaced}
+          setupOpen={setupOpen}
+          shotsOpen={shotsOpen}
+          onToggleSetup={() => setSetupOpen((v) => !v)}
+          onToggleShots={() => setShotsOpen((v) => !v)}
+          onRequestPin={handleRequestPin}
         />
-
-        {/* Right: annotation panel */}
-        <div css={css({ position: "relative", flexShrink: 0 })}>
-          <AnnotationPanel
-            isOpen={annotationOpen}
-            onToggle={() => setAnnotationOpen((v) => !v)}
-            onRequestPin={handleRequestPin}
-          />
-          {!annotationOpen && (
-            <AnnotationToggleTab onClick={() => setAnnotationOpen(true)} />
-          )}
-        </div>
       </div>
 
       {/* AI Restyle modal — captures viewport, calls Gemini, shows result */}

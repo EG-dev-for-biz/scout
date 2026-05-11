@@ -23,6 +23,13 @@ export interface AnnotationPin {
   tags: string[];
   color: string;
   createdAt: string;
+  /**
+   * Captured viewport thumbnail at the moment the shutter fired — a
+   * downscaled JPEG data URL (~5 KB). Present only on Shot pins
+   * captured via <ShutterButton>. Older Shot pins or non-shot pins
+   * just don't have it; consumers render a focal-length-only tile.
+   */
+  thumbnail?: string;
 }
 
 export const PIN_TYPE_COLORS: Record<PinType, string> = {
