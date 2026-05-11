@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { findNamedSolarEvent } from "@/utils/solarPosition";
 
 type TimeStore = {
   /** The scene's current Date (governs sun position). */
@@ -87,13 +88,14 @@ export const useTimeStore = create<TimeStore>((set, _get) => ({
     set({ lensFlareIntensity: Math.max(0, Math.min(1, v)) }),
   setDitheringEnabled: (enabled) => set({ ditheringEnabled: enabled }),
 
-  jumpToGoldenHour: (_lat, _lng) =>
+  jumpToGoldenHour: (lat, lng) =>
     set((state) => {
-      const d = new Date(state.date);
-      // Approximate: 1 hour before sunset for the latitude. NYC summer ≈ 19:30,
-      // winter ≈ 16:00. Average to 17:30 — good enough as a quick jump.
-      d.setHours(17, 30, 0, 0);
-      return { date: d };
+      // Real solver: find when the sun reaches +6° altitude on the descent
+      // (evening golden hour) for the given lat/lng on the scene's current
+      // calendar day. If golden hour doesn't occur (polar winter), leave
+      // the time unchanged so the UI doesn't fight the user.
+      const event = findNamedSolarEvent(state.date, lat, lng, "goldenHourEvening");
+      return event ? { date: event } : {};
     }),
 }));
 

@@ -9,17 +9,28 @@ import {
   ColorDepth,
   DepthOfField,
   Pixelation,
+  GodRays,
 } from "@react-three/postprocessing";
 import { BlendFunction } from "postprocessing";
-import { Vector2 } from "three";
+import { Mesh, Vector2 } from "three";
+import { useRef, useMemo } from "react";
 import { useStyleStore } from "@/state/styleStore";
 import { useCinemaStore } from "@/state/cinemaStore";
+import { useWeatherStore } from "@/state/weatherStore";
+import { useTimeStore } from "@/state/timeStore";
+import { useAreaStore } from "@/state/areaStore";
 import {
   useCameraStore,
   bokehScaleFromLens,
   fovToFocalLength,
 } from "@/state/cameraStore";
+import {
+  getSolarPosition,
+  solarDirectionVector,
+} from "@/utils/solarPosition";
 import { useLUTEffect } from "./useLUTEffect";
+import { VolumetricFog } from "./VolumetricFog";
+import { SunMarker } from "./SunMarker";
 
 /**
  * Renders the active StyleProfile's postFX pipeline.
@@ -45,6 +56,43 @@ export function PostFX() {
   const bokehScale = bokehScaleFromLens(focalMM, apertureF);
   const worldFocusRange = Math.max(2, apertureF * 4);
 
+  // Weather store — new tier-1 atmospheric effects mirrored from
+  // AtmosphericRig so they work identically in the legacy render path.
+  const fogEnabled = useWeatherStore((s) => s.fog.enabled);
+  const hazeEnabled = useWeatherStore((s) => s.haze.enabled);
+  const godRaysState = useWeatherStore((s) => s.godRays);
+
+  // Choose the sun source the marker should track. In the legacy path
+  // the visible sun disc is whichever drei <Sky> is drawing:
+  //   - solar lighting ON  → real astronomical position
+  //   - solar lighting OFF → style preset's authored sunPosition
+  // Otherwise the god rays would emanate from a position that doesn't
+  // line up with the visible sun.
+  const date = useTimeStore((s) => s.date);
+  const solarLightingEnabled = useTimeStore((s) => s.solarLightingEnabled);
+  const center = useAreaStore((s) => s.center);
+  const stylePresetSunPos = useStyleStore((s) => s.active.sky.sunPosition);
+  const refLat = (center[0].lat + center[1].lat) / 2;
+  const refLng = (center[0].lng + center[1].lng) / 2;
+  const sun = useMemo(
+    () => getSolarPosition(date, refLat, refLng),
+    [date, refLat, refLng]
+  );
+  const sunDirReal = useMemo(() => solarDirectionVector(sun), [sun]);
+  // Direction the marker should follow. Memoized so SunMarker doesn't
+  // resubscribe each render.
+  const sunDirection = useMemo<[number, number, number]>(() => {
+    return solarLightingEnabled
+      ? sunDirReal
+      : (stylePresetSunPos as [number, number, number]);
+  }, [solarLightingEnabled, sunDirReal, stylePresetSunPos]);
+  // Gate by the marker's own y-component so even style-preset suns
+  // below the horizon don't trigger god rays.
+  const godRaysActive =
+    godRaysState.enabled && sunDirection[1] > 0;
+
+  const sunMarkerRef = useRef<Mesh>(null!);
+
   // Disable composer entirely if every effect is off — saves a full
   // additional render pass and keeps the scene at native quality.
   const anyEnabled =
@@ -56,102 +104,145 @@ export function PostFX() {
     fx.posterize.enabled ||
     fx.pixelation.enabled ||
     lutEffect != null ||
-    dofEnabled;
+    dofEnabled ||
+    fogEnabled ||
+    hazeEnabled ||
+    godRaysActive;
 
   if (!anyEnabled) return null;
 
   return (
-    <EffectComposer multisampling={2}>
-      {/* Depth of field — first in the chain so bokeh inherits the raw
-          scene, before grade/bloom amplify highlights. */}
-      {dofEnabled ? (
-        <DepthOfField
-          target={focusTarget ?? undefined}
-          worldFocusRange={worldFocusRange}
-          bokehScale={bokehScale}
-          height={480}
-        />
-      ) : (
-        <></>
+    <>
+      {/* SunMarker lives in the scene tree, OUTSIDE the EffectComposer.
+          GodRays reads its depth/silhouette to seed the radial blur.
+          In legacy mode we pass the active sun direction explicitly so
+          the marker tracks whatever the drei <Sky> disc is showing. */}
+      {godRaysActive && (
+        <SunMarker ref={sunMarkerRef} direction={sunDirection} />
       )}
 
-      {/* Color grading: hue/sat first, then brightness/contrast */}
-      {fx.grade.enabled ? (
-        <HueSaturation hue={fx.grade.hue} saturation={fx.grade.saturation} />
-      ) : (
-        <></>
-      )}
-      {fx.grade.enabled ? (
-        <BrightnessContrast
-          brightness={fx.grade.brightness}
-          contrast={fx.grade.contrast}
-        />
-      ) : (
-        <></>
-      )}
+      <EffectComposer multisampling={2}>
+        {/* Depth of field — first in the chain so bokeh inherits the raw
+            scene, before grade/bloom amplify highlights. */}
+        {dofEnabled ? (
+          <DepthOfField
+            target={focusTarget ?? undefined}
+            worldFocusRange={worldFocusRange}
+            bokehScale={bokehScale}
+            height={480}
+          />
+        ) : (
+          <></>
+        )}
 
-      {/* Posterize → ColorDepth (limit bits per channel) */}
-      {fx.posterize.enabled ? (
-        <ColorDepth bits={Math.max(2, Math.round(Math.log2(fx.posterize.levels) * 3))} />
-      ) : (
-        <></>
-      )}
+        {/* Atmospheric medium — same two-instance fog as AtmosphericRig.
+            Both gate on store density==0 internally so leaving them
+            mounted is cheap. */}
+        <VolumetricFog kind="ground" />
+        <VolumetricFog kind="haze" />
 
-      {/* Pixelation */}
-      {fx.pixelation.enabled ? (
-        <Pixelation granularity={fx.pixelation.granularity} />
-      ) : (
-        <></>
-      )}
+        {/* God rays — radial blur around the SunMarker. */}
+        {godRaysActive ? (
+          <GodRays
+            sun={sunMarkerRef}
+            samples={godRaysState.samples}
+            density={godRaysState.density}
+            decay={godRaysState.decay}
+            weight={godRaysState.weight}
+            exposure={godRaysState.exposure}
+            blur
+          />
+        ) : (
+          <></>
+        )}
 
-      {/* Bloom — must run on linear color space, before final grading */}
-      {fx.bloom.enabled ? (
-        <Bloom
-          intensity={fx.bloom.intensity}
-          luminanceThreshold={fx.bloom.threshold}
-          luminanceSmoothing={0.4}
-          mipmapBlur
-        />
-      ) : (
-        <></>
-      )}
+        {/* Color grading: hue/sat first, then brightness/contrast */}
+        {fx.grade.enabled ? (
+          <HueSaturation hue={fx.grade.hue} saturation={fx.grade.saturation} />
+        ) : (
+          <></>
+        )}
+        {fx.grade.enabled ? (
+          <BrightnessContrast
+            brightness={fx.grade.brightness}
+            contrast={fx.grade.contrast}
+          />
+        ) : (
+          <></>
+        )}
 
-      {/* Chromatic aberration */}
-      {fx.chromaticAberration.enabled ? (
-        <ChromaticAberration
-          offset={
-            new Vector2(fx.chromaticAberration.offset, fx.chromaticAberration.offset)
-          }
-          radialModulation={false}
-          modulationOffset={0}
-        />
-      ) : (
-        <></>
-      )}
+        {/* Posterize → ColorDepth (limit bits per channel) */}
+        {fx.posterize.enabled ? (
+          <ColorDepth bits={Math.max(2, Math.round(Math.log2(fx.posterize.levels) * 3))} />
+        ) : (
+          <></>
+        )}
 
-      {/* Vignette — darken corners */}
-      {fx.vignette.enabled ? (
-        <Vignette
-          darkness={fx.vignette.darkness}
-          offset={fx.vignette.offset}
-          eskil={false}
-        />
-      ) : (
-        <></>
-      )}
+        {/* Pixelation */}
+        {fx.pixelation.enabled ? (
+          <Pixelation granularity={fx.pixelation.granularity} />
+        ) : (
+          <></>
+        )}
 
-      {/* Film grain */}
-      {fx.noise.enabled ? (
-        <Noise opacity={fx.noise.opacity} blendFunction={BlendFunction.OVERLAY} />
-      ) : (
-        <></>
-      )}
+        {/* Bloom — must run on linear color space, before final grading */}
+        {/* Bloom — combines style preset's bloom with a sun-coupled
+            boost when god rays are active. See AtmosphericRig.tsx for
+            the rationale; mirror of the same logic for legacy parity. */}
+        {fx.bloom.enabled || godRaysActive ? (
+          <Bloom
+            intensity={Math.max(
+              fx.bloom.enabled ? fx.bloom.intensity : 0,
+              godRaysActive ? 0.8 + godRaysState.exposure * 0.6 : 0
+            )}
+            luminanceThreshold={Math.min(
+              fx.bloom.enabled ? fx.bloom.threshold : 1,
+              godRaysActive ? 0.85 : 1
+            )}
+            luminanceSmoothing={0.4}
+            mipmapBlur
+          />
+        ) : (
+          <></>
+        )}
 
-      {/* User LUT (.cube). Mounted last so the cinema grade sees the fully
-          composited frame; in atmospheric mode the LUT lives BEFORE the
-          AGX tonemap, but the legacy path has no explicit tonemap so the
-          LUT applies last either way. */}
-      {lutEffect ? <primitive object={lutEffect} dispose={null} /> : <></>}
-    </EffectComposer>
+        {/* Chromatic aberration */}
+        {fx.chromaticAberration.enabled ? (
+          <ChromaticAberration
+            offset={
+              new Vector2(fx.chromaticAberration.offset, fx.chromaticAberration.offset)
+            }
+            radialModulation={false}
+            modulationOffset={0}
+          />
+        ) : (
+          <></>
+        )}
+
+        {/* Vignette — darken corners */}
+        {fx.vignette.enabled ? (
+          <Vignette
+            darkness={fx.vignette.darkness}
+            offset={fx.vignette.offset}
+            eskil={false}
+          />
+        ) : (
+          <></>
+        )}
+
+        {/* Film grain */}
+        {fx.noise.enabled ? (
+          <Noise opacity={fx.noise.opacity} blendFunction={BlendFunction.OVERLAY} />
+        ) : (
+          <></>
+        )}
+
+        {/* User LUT (.cube). Mounted last so the cinema grade sees the fully
+            composited frame; in atmospheric mode the LUT lives BEFORE the
+            AGX tonemap, but the legacy path has no explicit tonemap so the
+            LUT applies last either way. */}
+        {lutEffect ? <primitive object={lutEffect} dispose={null} /> : <></>}
+      </EffectComposer>
+    </>
   );
 }

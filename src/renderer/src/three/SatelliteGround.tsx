@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { fetchGroundImagery, BBox, getActiveProviderId } from "@/utils/tileProvider";
 import { usePaintedSceneStore } from "@/state/paintedSceneStore";
+import { useWeatherStore } from "@/state/weatherStore";
 
 const PROJ_SCALE = 51000;
 const FETCH_DEBOUNCE_MS = 350;
@@ -149,15 +150,22 @@ export function SatelliteGround({
   // Painted ground takes precedence over raw satellite
   const activeTexture = paintedTexture ?? texture;
 
+  // Wetness from weather store — drops roughness (more specular) and bumps
+  // metalness (mirror-like reflections start to appear) as the surface
+  // gets wet. Pure 0..1 linear interpolation; the visual effect reads as
+  // glossy puddle terrain at wetness >= 0.5.
+  const wetness = useWeatherStore((s) => s.wetness);
+  const groundRoughness = 1 - wetness * 0.85;
+  const groundMetalness = wetness * 0.4;
+
   return (
     <>
       {/* Ground plane — uses painted AI texture when available, else satellite.
           Lit material so SunLight + SkyLight from <AtmosphericRig> tint the
           imagery and sun shadows from buildings actually land on the ground.
-          `roughness: 1, metalness: 0` keeps it fully diffuse (no glossy
-          highlights on a photographic plate). Legacy (non-atmospheric)
-          ambient + directional lighting also affects it but mildly, which is
-          desired so the ground reads as part of the lit scene. */}
+          Roughness/metalness slide with the weather store's `wetness` value
+          so rain-soaked streets pick up specular highlights and puddle
+          reflections at wetness >= 0.5. */}
       {activeTexture && (
         <mesh
           rotation={[-Math.PI / 2, 0, 0]}
@@ -168,8 +176,8 @@ export function SatelliteGround({
           <planeGeometry args={[planeSize.width, planeSize.height]} />
           <meshStandardMaterial
             map={activeTexture}
-            roughness={1}
-            metalness={0}
+            roughness={groundRoughness}
+            metalness={groundMetalness}
             transparent={opacity < 1}
             opacity={opacity}
           />

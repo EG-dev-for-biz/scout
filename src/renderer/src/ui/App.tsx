@@ -18,6 +18,8 @@ import { PaintBuildingsButton } from "@/components/PaintBuildingsButton";
 import { PaintFlowOverlay } from "@/components/PaintFlowOverlay";
 import { LocationSearch } from "@/components/LocationSearch";
 import { TimeControls } from "@/components/TimeControls";
+import { WeatherControls } from "@/components/WeatherControls";
+import { MoodBookmarks } from "@/components/MoodBookmarks";
 import { ViewportAspectControl } from "@/components/ViewportAspectControl";
 import { Modal } from "@/components/modal/Modal";
 import { Column } from "@/components/flex/Column";
@@ -33,6 +35,8 @@ import { useStyleStore } from "@/state/styleStore";
 import { useRenderModeStore } from "@/state/renderModeStore";
 import { usePaintedSceneStore } from "@/state/paintedSceneStore";
 import { useViewportStore, ratioFor } from "@/state/viewportStore";
+import { useWeatherStore, DEFAULT_WEATHER } from "@/state/weatherStore";
+import { useBookmarkStore } from "@/state/bookmarkStore";
 import { PinType } from "@/state/annotationStore";
 import {
   Map,
@@ -459,15 +463,24 @@ function LeftPanel({
             )}
           </div>
 
-          {/* Time / Sun controls — anchored at bottom */}
+          {/* Time / Sun / Weather / Mood controls — scrollable so the
+              stack can grow without pushing other panels off-screen. */}
           <div
             css={css({
               padding: "12px",
               borderTop: "1px solid #2a2a2e",
-              flexShrink: 0,
+              flex: "0 1 auto",
+              overflowY: "auto",
+              overflowX: "hidden",
+              display: "flex",
+              flexDirection: "column",
+              gap: "10px",
+              maxHeight: "62%",
             })}
           >
             <TimeControls />
+            <WeatherControls />
+            <MoodBookmarks />
           </div>
         </div>
       </div>
@@ -679,6 +692,8 @@ export default function App() {
   const setActiveStyle = useStyleStore((s) => s.setActiveById);
   const setRenderMode = useRenderModeStore((s) => s.setMode);
   const clearPaintedScene = usePaintedSceneStore((s) => s.clear);
+  const resetWeather = useWeatherStore((s) => s.setAll);
+  const resetBookmarks = useBookmarkStore((s) => s.setSlots);
 
   // Cancel pending pin on Escape
   useEffect(() => {
@@ -696,8 +711,19 @@ export default function App() {
     setActiveStyle("realistic");
     setRenderMode("osm");
     clearPaintedScene();
+    resetWeather(DEFAULT_WEATHER);
+    resetBookmarks([null, null, null]);
     setPendingPinType(null);
-  }, [clearAreas, clearPins, resetProject, setActiveStyle, setRenderMode, clearPaintedScene]);
+  }, [
+    clearAreas,
+    clearPins,
+    resetProject,
+    setActiveStyle,
+    setRenderMode,
+    clearPaintedScene,
+    resetWeather,
+    resetBookmarks,
+  ]);
 
   const handleRequestPin = useCallback((type: PinType) => {
     setPendingPinType(type);

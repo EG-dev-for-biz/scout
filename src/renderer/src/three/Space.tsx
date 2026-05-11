@@ -19,11 +19,13 @@ import { PhotorealTiles } from "./PhotorealTiles";
 import { CameraController } from "./CameraController";
 import { PaintedSky } from "./PaintedSky";
 import { AtmosphericRig } from "./AtmosphericRig";
+import { Precipitation } from "./Precipitation";
 import { useProjectedBuildingMaterial } from "./ProjectedBuildingMaterial";
 import { usePaintedSceneStore } from "@/state/paintedSceneStore";
 import { useCarStore } from "@/state/carStore";
 import { useCameraStore } from "@/state/cameraStore";
 import { usePoseStore } from "@/state/poseStore";
+import { useWeatherStore } from "@/state/weatherStore";
 import Car from "./Car";
 import instanceFleet from "@/api/axios";
 
@@ -68,6 +70,9 @@ function Building({
   const [clicked, setClicked] = useState(false);
 
   const mat = useStyleStore((s) => s.active.materials);
+  // Wetness from weather store. Pulls roughness down on the plain standard
+  // material path (toon shading stays matte — wet toon doesn't read right).
+  const wetness = useWeatherStore((s) => s.wetness);
   // When the ground has been AI-painted, swap to the derived palette so
   // buildings harmonize with the painted aerial.
   const derivedPalette = usePaintedSceneStore((s) => s.derivedBuildingPalette);
@@ -144,7 +149,10 @@ function Building({
           color={color}
           emissive={emissiveColor}
           emissiveIntensity={emissiveIntensity}
-          roughness={0.85}
+          // Roughness drops with wetness so building facades pick up
+          // specular highlights in a storm or "after rain" mood.
+          roughness={Math.max(0.15, 0.85 - wetness * 0.55)}
+          metalness={wetness * 0.15}
         />
       )}
 
@@ -361,6 +369,7 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
   const date = useTimeStore((s) => s.date);
   const solarLightingEnabled = useTimeStore((s) => s.solarLightingEnabled);
   const atmosphereEnabled = useTimeStore((s) => s.atmosphereEnabled);
+  const sunStrength = useWeatherStore((s) => s.sunStrength);
   const renderMode = useRenderModeStore((s) => s.mode);
   const thirdMode = useCarStore((s) => s.thirdMode);
   const paintedSky = usePaintedSceneStore((s) => s.skyTexture);
@@ -385,12 +394,19 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
 
   // Below-horizon attenuation for solar lighting: dim the sun, lift ambient
   const isNight = solarLightingEnabled && sun.altitude < -0.05;
-  const sunIntensity = solarLightingEnabled
+  const baseSunIntensity = solarLightingEnabled
     ? Math.max(0.05, Math.sin(Math.max(0, sun.altitude))) * Math.PI
     : Math.PI;
-  const ambientIntensity = isNight
+  const baseAmbientIntensity = isNight
     ? Math.PI * 0.15
     : style.sky.ambientIntensity;
+  // Sun-strength multiplier from weather store. Full effect on the
+  // directional sun; partial pass-through to ambient (0.5..1.5 of base)
+  // so dialing up the sun also brightens shadow sides without flatlining
+  // the contrast.
+  const sunIntensity = baseSunIntensity * sunStrength;
+  const ambientIntensity =
+    baseAmbientIntensity * (0.5 + sunStrength * 0.5);
 
   const refLat = (center[1].lat + center[0].lat) / 2;
   const refLng = (center[1].lng + center[0].lng) / 2;
@@ -550,6 +566,12 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
       ))}
 
       <Car />
+
+      {/* Weather particles — rain, drizzle, snow. Single-draw-call points
+          system, follows the camera so streaks always surround the viewer.
+          Lives in shared sceneContent so it renders identically in both
+          atmospheric and legacy paths. */}
+      <Precipitation />
     </>
   );
 

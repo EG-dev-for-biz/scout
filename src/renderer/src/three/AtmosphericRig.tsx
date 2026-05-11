@@ -11,10 +11,11 @@ import {
   ColorDepth,
   DepthOfField,
   Pixelation,
+  GodRays,
 } from "@react-three/postprocessing";
 import { BlendFunction, KernelSize, Resolution, ToneMappingMode } from "postprocessing";
 import type { LensFlareEffect } from "@takram/three-geospatial-effects";
-import { HalfFloatType, Matrix4, NoToneMapping, Vector2, Vector3 } from "three";
+import { HalfFloatType, Matrix4, Mesh, NoToneMapping, Vector2, Vector3 } from "three";
 import {
   Atmosphere,
   Sky,
@@ -41,6 +42,9 @@ import { useRenderModeStore } from "@/state/renderModeStore";
 import { useStyleStore } from "@/state/styleStore";
 import { useCinemaStore } from "@/state/cinemaStore";
 import { useViewportStore } from "@/state/viewportStore";
+import { useWeatherStore, windVelocityEastNorth } from "@/state/weatherStore";
+import { VolumetricFog } from "./VolumetricFog";
+import { SunMarker } from "./SunMarker";
 import {
   useCameraStore,
   bokehScaleFromLens,
@@ -93,6 +97,33 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
   const lensFlareIntensity = useTimeStore((s) => s.lensFlareIntensity);
   const ditheringEnabled = useTimeStore((s) => s.ditheringEnabled);
   const shadowsEnabled = useTimeStore((s) => s.shadowsEnabled);
+
+  // Weather store — drives clouds wind, volumetric fog, god rays.
+  // Fog + haze enabled flags live inside the <VolumetricFog> component
+  // itself, which collapses density to zero when disabled. The store
+  // godRays flag is read here because we need it to gate the SunMarker
+  // mesh and the GodRays effect at the EffectComposer level.
+  const wind = useWeatherStore((s) => s.wind);
+  const godRaysState = useWeatherStore((s) => s.godRays);
+  const sunStrength = useWeatherStore((s) => s.sunStrength);
+
+  // Cloud wind velocity. takram's `localWeatherVelocity` is NOT in m/s
+  // — it's in cube-sphere tile-units per second, where one tile is
+  // ~100 km wide (default localWeatherRepeat=100 on Earth's ~40,000 km
+  // cube-sphere). Multiplying raw m/s by ~1/100,000 gives the physical
+  // conversion; we bias slightly faster (1/50,000) since wind aloft is
+  // usually stronger than ground wind, and the cinematic look is
+  // "clouds drift visibly". With this scale a 10 m/s wind moves the
+  // weather texture at 2e-4 tiles/sec ≈ 20 m/sec apparent motion at the
+  // tile scale, which reads as gentle drift in a real-time camera.
+  const CLOUD_WIND_TILES_PER_MPS = 1 / 50000;
+  const cloudWindVel = useMemo(() => {
+    const [east, north] = windVelocityEastNorth(wind);
+    return new Vector2(
+      east * CLOUD_WIND_TILES_PER_MPS,
+      north * CLOUD_WIND_TILES_PER_MPS
+    );
+  }, [wind]);
 
   // Cinema toolkit — LUT lives in cinemaStore, anamorphic is derived from
   // the viewport aspect ratio so there's a single source of truth.
@@ -166,8 +197,15 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
   // Smoothly ramp 0..1 as sun drops from 0° to -12°.
   const twilightAmount = Math.min(1, sunBelowHorizonFactor * 5);
 
+  // God rays gating: enabled flag AND sun above horizon. Without the
+  // altitude check the radial blur smears an upside-down bar at night.
+  const godRaysActive = godRaysState.enabled && sun.altitude > 0;
+
   const atmosphereRef = useRef<AtmosphereApi>(null);
   const lensFlareRef = useRef<LensFlareEffect>(null);
+  // SunMarker mesh — shared between the marker render and the GodRays
+  // effect (which needs the same Mesh as its `sun` prop).
+  const sunMarkerRef = useRef<Mesh>(null!);
   const gl = useThree(({ gl }) => gl);
 
   // The takram LensFlareEffect ships with KawaseBlurPass at kernelSize SMALL
@@ -281,6 +319,68 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
       />
       <SkyLight position={[0, 0, 0]} />
 
+      {/* Sun-strength boost. takram's <SunLight> is physically calibrated
+          via the atmospheric LUTs, which is correct but conservative for
+          cinematic readability. When `sunStrength > 1` we add a
+          supplemental directional light aligned with the real sun
+          direction so building facades pick up more visible illumination.
+          Color shifts warm as the sun drops so golden-hour boost feels
+          natural, not like a studio fill. Only active when the sun is
+          above the horizon — below horizon the boost would just light
+          the wrong side. */}
+      {sunStrength > 1.0 && sun.altitude > 0 ? (() => {
+        const r = Math.cos(sun.altitude);
+        const sx = r * Math.sin(sun.azimuth);
+        const sy = Math.sin(sun.altitude);
+        const sz = -r * Math.cos(sun.azimuth);
+        const color =
+          sun.altitude > 0.26
+            ? "#fff5dc"
+            : sun.altitude > 0.1
+              ? "#ffe0b0"
+              : "#ffb070";
+        return (
+          <directionalLight
+            position={[sx * 4000, sy * 4000, sz * 4000]}
+            color={color}
+            intensity={(sunStrength - 1) * Math.PI * 1.2}
+            castShadow={false}
+          />
+        );
+      })() : null}
+
+      {/* Ambient fill that scales with sunStrength so the shadow side of
+          objects also reads brighter when the user cranks up the sun.
+          Below 1.0 this contributes nothing; above 1.0 it adds a soft
+          warm-cool fill that complements the directional boost. */}
+      <hemisphereLight
+        args={["#c8d4ec", "#a08060"]}
+        intensity={Math.max(0, (sunStrength - 1) * 0.35)}
+        position={[0, 1, 0]}
+      />
+
+      {/* Bounce / radiosity fill. takram's <SkyLight> captures the sky
+          dome's contribution to surface irradiance but does NOT model
+          inter-surface bounce — the light that bounces off the ground
+          and adjacent buildings to fill shadow sides. Without it, the
+          atmospheric path renders ~physically correctly but reads as
+          unnaturally dark on shadow facets compared to legacy mode
+          (which leans on a beefy ambient + a couple of cheat point
+          lights). This hemisphere light reintroduces that bounce energy
+          cheaply: cool grey from above (sky bounce on rooftops), warm
+          tan from below (asphalt / concrete bounce on undersides).
+          Intensity tracks sin(altitude) so high-noon scenes get the
+          most bounce and dusk/dawn taper to zero — and it scales with
+          sunStrength so the user's multiplier brightens fill in lockstep
+          with the directional sun. */}
+      <hemisphereLight
+        args={["#bccae0", "#c8b89c"]}
+        intensity={
+          Math.max(0, Math.sin(Math.max(0, sun.altitude))) * 0.55 * sunStrength
+        }
+        position={[0, 1, 0]}
+      />
+
       {/* Twilight / city skyglow. Cool blue sky above, warm sodium below.
           Only on when the sun is below the horizon so daytime physics
           stay pure. Intensity caps low — the goal is "now I can see the
@@ -317,6 +417,11 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
 
       {children}
 
+      {/* SunMarker — invisible tracking mesh at the sun's altitude/azimuth.
+          Needed only when god rays are active. Lives in scene space so
+          buildings naturally occlude it for the radial-blur silhouettes. */}
+      {godRaysActive && <SunMarker ref={sunMarkerRef} />}
+
       <EffectComposer
         enableNormalPass
         multisampling={0}
@@ -331,6 +436,9 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
             coverage={cloudCoverage}
             shadow-cascadeCount={3}
             shadow-mapSize={[512, 512]}
+            // Wind drift — same vector that powers fog drift and rain
+            // slant. localWeatherVelocity is in scene-local east/north m/s.
+            localWeatherVelocity={cloudWindVel}
           />
         ) : (
           <></>
@@ -340,6 +448,33 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
             over the sky background; disable in photoreal/hybrid so we
             don't double-haze Google's pre-lit tiles. */}
         <AerialPerspective sky={showSkyFromAerial} />
+
+        {/* Volumetric fog — two instances of the same effect with
+            different parameter presets. Ground fog is low and dense;
+            haze is tall, thin, and sun-coupled. Both gate on density==0
+            internally when their store flags are off, so leaving them
+            mounted is cheap and avoids EffectMaterial recompiles. */}
+        <VolumetricFog kind="ground" />
+        <VolumetricFog kind="haze" />
+
+        {/* God rays — radial blur around the SunMarker mesh. Gated by
+            sun altitude so we don't render an upside-down bar at night.
+            The marker is positioned in the scene tree above so it lives
+            in the same world space as buildings (which occlude it,
+            seeding the silhouettes). */}
+        {godRaysActive ? (
+          <GodRays
+            sun={sunMarkerRef}
+            samples={godRaysState.samples}
+            density={godRaysState.density}
+            decay={godRaysState.decay}
+            weight={godRaysState.weight}
+            exposure={godRaysState.exposure}
+            blur
+          />
+        ) : (
+          <></>
+        )}
 
         {/* Depth of field — runs in HDR before grading/bloom so the bokeh
             inherits the scene's color science. `target` snaps the focus
@@ -386,10 +521,24 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
         ) : (
           <></>
         )}
-        {fx.bloom.enabled ? (
+        {/* Bloom — combines the style preset's bloom with a sun-coupled
+            boost when god rays are active. The sun pass on its own is a
+            pure screen-space radial smear and doesn't deposit light onto
+            surfaces; this bloom picks up the bright sun area + the rays
+            and bleeds them outward, which reads as "the sun is
+            illuminating the buildings." We use max(style, sun) so a
+            style that already has heavy bloom (Cyberpunk) isn't doubled
+            up. */}
+        {fx.bloom.enabled || godRaysActive ? (
           <Bloom
-            intensity={fx.bloom.intensity}
-            luminanceThreshold={fx.bloom.threshold}
+            intensity={Math.max(
+              fx.bloom.enabled ? fx.bloom.intensity : 0,
+              godRaysActive ? 0.8 + godRaysState.exposure * 0.6 : 0
+            )}
+            luminanceThreshold={Math.min(
+              fx.bloom.enabled ? fx.bloom.threshold : 1,
+              godRaysActive ? 0.85 : 1
+            )}
             luminanceSmoothing={0.4}
             mipmapBlur
           />
@@ -456,7 +605,7 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
           // can crank the internal Kawase pre-blur kernel up to HUGE — that
           // softens the flare from "stair-stepped block" into a cinematic
           // diffuse glow without losing intensity.
-          <LensFlare ref={lensFlareRef} resolution={Resolution.AUTO} />
+          <LensFlare ref={lensFlareRef} resolution={Resolution.HIGH} />
         ) : (
           <></>
         )}

@@ -8,6 +8,8 @@ import { useStyleStore } from "@/state/styleStore";
 import { useTimeStore } from "@/state/timeStore";
 import { useRenderModeStore } from "@/state/renderModeStore";
 import { usePaintedSceneStore } from "@/state/paintedSceneStore";
+import { useWeatherStore, DEFAULT_WEATHER } from "@/state/weatherStore";
+import { useBookmarkStore } from "@/state/bookmarkStore";
 import { serializeProject, deserializeProject } from "@/utils/projectFile";
 import { useActionStore } from "@/state/exportStore";
 
@@ -19,6 +21,8 @@ const styleStoreModule = useStyleStore;
 const timeStoreModule = useTimeStore;
 const renderModeStoreModule = useRenderModeStore;
 const paintedSceneStoreModule = usePaintedSceneStore;
+const weatherStoreModule = useWeatherStore;
+const bookmarkStoreModule = useBookmarkStore;
 
 interface ToolbarButtonProps {
   onClick: () => void;
@@ -74,6 +78,11 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
   const paintedSkyTexture = usePaintedSceneStore((s) => s.skyTexture);
   const paintedSkyStyleId = usePaintedSceneStore((s) => s.paintedSkyStyleId);
   const buildingsPaintedViews = usePaintedSceneStore((s) => s.buildingsPaintedViews);
+  // NOTE: Don't subscribe to a derived `weather` object via zustand's
+  // selector — returning a new object literal would bust reference
+  // equality and cause an infinite re-render loop. Snapshot lazily inside
+  // the save handlers via `useXxx.getState()` instead. The save handlers
+  // run on click; staleness is impossible.
   const { triggerGlbExport, triggerAnnotationsExport, triggerShotListExport } = useActionStore();
 
   const handleNew = () => {
@@ -125,8 +134,26 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
     if (buildingsViews.length > 0) {
       paintedSceneStoreModule.getState().setBuildingsPaintedViews(buildingsViews);
     }
+    // v1.8 — weather + mood bookmarks. Both are optional; absent fields
+    // reset to defaults so an older project loads with a clean weather
+    // panel rather than residual state from the previous project.
+    weatherStoreModule.getState().setAll(project.weather ?? DEFAULT_WEATHER);
+    bookmarkStoreModule.getState().setSlots(project.moodBookmarks ?? [null, null, null]);
     projectStoreModule.getState().markSaved(result.filePath!);
     projectStoreModule.getState().setProjectName(project.name);
+  };
+
+  const buildWeatherSnapshot = () => {
+    const w = weatherStoreModule.getState();
+    return {
+      wind: w.wind,
+      fog: w.fog,
+      haze: w.haze,
+      godRays: w.godRays,
+      precipitation: w.precipitation,
+      wetness: w.wetness,
+      autoLinkWetness: w.autoLinkWetness,
+    };
   };
 
   const handleSave = async () => {
@@ -144,7 +171,9 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
       paintedStyleId,
       paintedSkyTexture,
       paintedSkyStyleId,
-      buildingsPaintedViews
+      buildingsPaintedViews,
+      buildWeatherSnapshot(),
+      bookmarkStoreModule.getState().slots
     );
 
     if (projectPath) {
@@ -170,7 +199,9 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
       paintedStyleId,
       paintedSkyTexture,
       paintedSkyStyleId,
-      buildingsPaintedViews
+      buildingsPaintedViews,
+      buildWeatherSnapshot(),
+      bookmarkStoreModule.getState().slots
     );
     const result = await window.api.dialog.saveFileAs(content);
     if (!result.canceled && result.filePath) {
