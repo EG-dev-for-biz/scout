@@ -22,6 +22,7 @@ import { AtmosphericRig } from "./AtmosphericRig";
 import { useProjectedBuildingMaterial } from "./ProjectedBuildingMaterial";
 import { usePaintedSceneStore } from "@/state/paintedSceneStore";
 import { useCarStore } from "@/state/carStore";
+import { useCameraStore } from "@/state/cameraStore";
 import Car from "./Car";
 import instanceFleet from "@/api/axios";
 
@@ -415,8 +416,20 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
     setRealCenter(center);
   }, [areas]);
 
+  const focusPickMode = useCameraStore((s) => s.focusPickMode);
+  const setFocusTarget = useCameraStore((s) => s.setFocusTarget);
+  const setFocusPickMode = useCameraStore((s) => s.setFocusPickMode);
+
   const handleSceneClick = useCallback(
     (point: THREE.Vector3) => {
+      // Focus pick wins over pin placement when both modes happen to be
+      // active. Sets the DoF target and auto-clears the pick state so the
+      // next click goes back to normal scene interaction.
+      if (focusPickMode) {
+        setFocusTarget([point.x, point.y, point.z]);
+        setFocusPickMode(false);
+        return;
+      }
       if (!pendingPinType) return;
       addPin({
         name: "",
@@ -428,8 +441,19 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
       markDirty();
       onPinPlaced?.();
     },
-    [pendingPinType, addPin, markDirty, onPinPlaced]
+    [
+      focusPickMode,
+      pendingPinType,
+      addPin,
+      markDirty,
+      onPinPlaced,
+      setFocusTarget,
+      setFocusPickMode,
+    ]
   );
+
+  // Either mode wants pointer events on geometry so the click handler fires.
+  const wantsSceneClicks = pendingPinType || focusPickMode;
 
   // Atmospheric rig + painted skybox are mutually exclusive:
   //   - Painted skybox is a stylized AI-generated dome; physical sky would
@@ -465,7 +489,7 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
             shape={item.shape}
             extrudeSettings={item.extrudeSettings}
             tags={item.tags}
-            onSceneClick={pendingPinType ? handleSceneClick : undefined}
+            onSceneClick={wantsSceneClicks ? handleSceneClick : undefined}
             wireframeOnly={renderMode === "hybrid"}
             groundWidth={groundWidth}
             groundHeight={groundHeight}
@@ -476,7 +500,7 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
       {showOsmBuildings && renderMode !== "hybrid" && <Roads area={realCenter} />}
 
       {/* Ground click plane (for placing pins in open areas) */}
-      <GroundPlane onSceneClick={pendingPinType ? handleSceneClick : undefined} />
+      <GroundPlane onSceneClick={wantsSceneClicks ? handleSceneClick : undefined} />
 
       {/* Annotation Pins */}
       {pins.map((pin) => (
@@ -496,7 +520,7 @@ export function Space({ pendingPinType, onPinPlaced }: SpaceProps) {
       // mode (near stays at 0.1, so Z-precision is unchanged).
       camera={{ fov: 60, near: 0.1, far: 1e5 }}
       gl={{ preserveDrawingBuffer: true }}
-      style={{ cursor: pendingPinType ? "crosshair" : "default" }}
+      style={{ cursor: wantsSceneClicks ? "crosshair" : "default" }}
     >
       {useAtmosphere ? (
         <AtmosphericRig>{sceneContent}</AtmosphericRig>

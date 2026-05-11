@@ -9,6 +9,7 @@ import {
   HueSaturation,
   BrightnessContrast,
   ColorDepth,
+  DepthOfField,
   Pixelation,
 } from "@react-three/postprocessing";
 import { BlendFunction, KernelSize, ToneMappingMode } from "postprocessing";
@@ -40,6 +41,11 @@ import { useRenderModeStore } from "@/state/renderModeStore";
 import { useStyleStore } from "@/state/styleStore";
 import { useCinemaStore } from "@/state/cinemaStore";
 import { useViewportStore } from "@/state/viewportStore";
+import {
+  useCameraStore,
+  bokehScaleFromLens,
+  fovToFocalLength,
+} from "@/state/cameraStore";
 import {
   getMoonPosition,
   moonColorForPhase,
@@ -95,6 +101,21 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
   const anamorphicEnabled = useViewportStore(
     (s) => s.aspectRatio === "anamorphic"
   );
+
+  // Depth of field — physical aperture + focus point. The bokeh scale is
+  // derived from the live lens focal length and chosen f-stop so longer
+  // lenses + wider apertures (smaller f-numbers) produce shallower DoF, as
+  // they would on a real camera.
+  const dofEnabled = useCameraStore((s) => s.dofEnabled);
+  const apertureF = useCameraStore((s) => s.apertureF);
+  const focusTarget = useCameraStore((s) => s.focusTarget);
+  const userFovDeg = useCameraStore((s) => s.userFovDeg);
+  const focalMM = fovToFocalLength(userFovDeg);
+  const bokehScale = bokehScaleFromLens(focalMM, apertureF);
+  // World-space focus band width — wider aperture (smaller N) = narrower
+  // band, tighter aperture = wider band. Tuned to read naturally on
+  // typical scouting distances (10..500 m).
+  const worldFocusRange = Math.max(2, apertureF * 4);
   // Anamorphic preset auto-enables lens flare and biases ChromaticAberration
   // and Noise so the rig reads as cinema rather than digital flat.
   const lensFlareEnabled = lensFlareUserToggle || anamorphicEnabled;
@@ -280,6 +301,22 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
             over the sky background; disable in photoreal/hybrid so we
             don't double-haze Google's pre-lit tiles. */}
         <AerialPerspective sky={showSkyFromAerial} />
+
+        {/* Depth of field — runs in HDR before grading/bloom so the bokeh
+            inherits the scene's color science. `target` snaps the focus
+            plane to the user's clicked focus point; when null, the effect
+            defaults to a point ~50 m in front of the camera (handled by the
+            DepthOfField effect itself). */}
+        {dofEnabled ? (
+          <DepthOfField
+            target={focusTarget ?? undefined}
+            worldFocusRange={worldFocusRange}
+            bokehScale={bokehScale}
+            height={480}
+          />
+        ) : (
+          <></>
+        )}
 
         {/* Scout3d's style-driven post chain, folded in BETWEEN atmospheric
             inscatter and final tonemap so cinematic grading still applies.

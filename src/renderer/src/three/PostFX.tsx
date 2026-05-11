@@ -7,12 +7,18 @@ import {
   HueSaturation,
   BrightnessContrast,
   ColorDepth,
+  DepthOfField,
   Pixelation,
 } from "@react-three/postprocessing";
 import { BlendFunction } from "postprocessing";
 import { Vector2 } from "three";
 import { useStyleStore } from "@/state/styleStore";
 import { useCinemaStore } from "@/state/cinemaStore";
+import {
+  useCameraStore,
+  bokehScaleFromLens,
+  fovToFocalLength,
+} from "@/state/cameraStore";
 import { useLUTEffect } from "./useLUTEffect";
 
 /**
@@ -30,6 +36,15 @@ export function PostFX() {
   const lutIntensity = useCinemaStore((s) => s.lutIntensity);
   const lutEffect = useLUTEffect(lutEnabled ? lutUrl : null, lutIntensity);
 
+  // Depth of field (legacy path mirror of AtmosphericRig).
+  const dofEnabled = useCameraStore((s) => s.dofEnabled);
+  const apertureF = useCameraStore((s) => s.apertureF);
+  const focusTarget = useCameraStore((s) => s.focusTarget);
+  const userFovDeg = useCameraStore((s) => s.userFovDeg);
+  const focalMM = fovToFocalLength(userFovDeg);
+  const bokehScale = bokehScaleFromLens(focalMM, apertureF);
+  const worldFocusRange = Math.max(2, apertureF * 4);
+
   // Disable composer entirely if every effect is off — saves a full
   // additional render pass and keeps the scene at native quality.
   const anyEnabled =
@@ -40,12 +55,26 @@ export function PostFX() {
     fx.grade.enabled ||
     fx.posterize.enabled ||
     fx.pixelation.enabled ||
-    lutEffect != null;
+    lutEffect != null ||
+    dofEnabled;
 
   if (!anyEnabled) return null;
 
   return (
     <EffectComposer multisampling={2}>
+      {/* Depth of field — first in the chain so bokeh inherits the raw
+          scene, before grade/bloom amplify highlights. */}
+      {dofEnabled ? (
+        <DepthOfField
+          target={focusTarget ?? undefined}
+          worldFocusRange={worldFocusRange}
+          bokehScale={bokehScale}
+          height={480}
+        />
+      ) : (
+        <></>
+      )}
+
       {/* Color grading: hue/sat first, then brightness/contrast */}
       {fx.grade.enabled ? (
         <HueSaturation hue={fx.grade.hue} saturation={fx.grade.saturation} />

@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from "react";
 import { css } from "@emotion/react";
-import { Aperture, ChevronDown } from "lucide-react";
+import { Aperture, ChevronDown, Target, Focus, X } from "lucide-react";
 import {
   useCameraStore,
   fovToFocalLength,
   LENS_PRESETS,
+  F_STOP_PRESETS,
   type LensPreset,
 } from "@/state/cameraStore";
 
@@ -21,6 +22,16 @@ export function LensPicker() {
   const current = useCameraStore((s) => s.current);
   const userFovDeg = useCameraStore((s) => s.userFovDeg);
   const setLensFocalMM = useCameraStore((s) => s.setLensFocalMM);
+  // DoF state
+  const dofEnabled = useCameraStore((s) => s.dofEnabled);
+  const apertureF = useCameraStore((s) => s.apertureF);
+  const focusTarget = useCameraStore((s) => s.focusTarget);
+  const focusPickMode = useCameraStore((s) => s.focusPickMode);
+  const setDofEnabled = useCameraStore((s) => s.setDofEnabled);
+  const setApertureF = useCameraStore((s) => s.setApertureF);
+  const setFocusTarget = useCameraStore((s) => s.setFocusTarget);
+  const setFocusPickMode = useCameraStore((s) => s.setFocusPickMode);
+
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -52,6 +63,15 @@ export function LensPicker() {
   const activePreset = LENS_PRESETS.find(
     (p) => Math.abs(p.focalMM - userFocal) <= 1
   );
+
+  // Distance from live camera position to the focus point, for the readout.
+  let focusDistanceM: number | null = null;
+  if (focusTarget && current) {
+    const dx = current.position[0] - focusTarget[0];
+    const dy = current.position[1] - focusTarget[1];
+    const dz = current.position[2] - focusTarget[2];
+    focusDistanceM = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }
 
   return (
     <div ref={rootRef} css={css({ position: "relative" })}>
@@ -186,6 +206,181 @@ export function LensPicker() {
               <span>150</span>
               <span>300</span>
             </div>
+          </div>
+
+          {/* Depth of field section */}
+          <div
+            css={css({
+              padding: "8px",
+              borderTop: "1px solid #2a2a2e",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+            })}
+          >
+            <label
+              css={css({
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                cursor: "pointer",
+                userSelect: "none",
+                fontSize: "11px",
+                fontWeight: "600",
+                color: "#e8e8ec",
+              })}
+            >
+              <span
+                css={css({
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                })}
+              >
+                <Focus size={11} color="#d97757" />
+                Depth of field
+              </span>
+              <input
+                type="checkbox"
+                checked={dofEnabled}
+                onChange={(e) => setDofEnabled(e.target.checked)}
+                css={css({ accentColor: "#3b82f6", margin: 0 })}
+              />
+            </label>
+
+            {dofEnabled && (
+              <>
+                {/* F-stop dropdown */}
+                <div
+                  css={css({
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px",
+                    fontSize: "10px",
+                    color: "#a0a0aa",
+                  })}
+                >
+                  <span>Aperture</span>
+                  <select
+                    value={apertureF}
+                    onChange={(e) => setApertureF(parseFloat(e.target.value))}
+                    css={css({
+                      backgroundColor: "#0f0f11",
+                      border: "1px solid #2a2a2e",
+                      borderRadius: "4px",
+                      padding: "3px 6px",
+                      color: "#e8e8ec",
+                      fontSize: "10px",
+                      fontFamily: "monospace",
+                      outline: "none",
+                      colorScheme: "dark",
+                      cursor: "pointer",
+                      ":focus": { borderColor: "#3b82f6" },
+                    })}
+                  >
+                    {F_STOP_PRESETS.map((fs) => (
+                      <option key={fs.value} value={fs.value}>
+                        {fs.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Click-to-focus toggle + focus point readout */}
+                <button
+                  onClick={() => setFocusPickMode(!focusPickMode)}
+                  css={css({
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "5px",
+                    backgroundColor: focusPickMode ? "#3b82f6" : "#1e1e22",
+                    border:
+                      "1px " +
+                      (focusPickMode ? "solid" : "dashed") +
+                      " " +
+                      (focusPickMode ? "#3b82f6" : "#3a3a3e"),
+                    borderRadius: "5px",
+                    padding: "6px 8px",
+                    color: focusPickMode ? "#fff" : "#a0a0aa",
+                    fontSize: "10px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    transition: "0.15s",
+                    ":hover": {
+                      backgroundColor: focusPickMode ? "#2563eb" : "#2a2a2e",
+                      color: "#e8e8ec",
+                    },
+                  })}
+                >
+                  <Target size={10} />
+                  {focusPickMode
+                    ? "Click in scene to set focus…"
+                    : "Click to focus"}
+                </button>
+
+                {focusTarget && (
+                  <div
+                    css={css({
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      fontSize: "10px",
+                      color: "#a0a0aa",
+                    })}
+                  >
+                    <span>Focus distance</span>
+                    <span
+                      css={css({
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                      })}
+                    >
+                      <span
+                        css={css({
+                          color: "#e8e8ec",
+                          fontFamily: "monospace",
+                        })}
+                      >
+                        {focusDistanceM != null
+                          ? focusDistanceM > 1000
+                            ? (focusDistanceM / 1000).toFixed(1) + "km"
+                            : focusDistanceM.toFixed(1) + "m"
+                          : "—"}
+                      </span>
+                      <button
+                        onClick={() => setFocusTarget(null)}
+                        title="Clear focus point"
+                        css={css({
+                          background: "transparent",
+                          border: "none",
+                          cursor: "pointer",
+                          color: "#6b6b78",
+                          padding: 0,
+                          display: "flex",
+                          ":hover": { color: "#e8e8ec" },
+                        })}
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  </div>
+                )}
+
+                <div
+                  css={css({
+                    fontSize: "9px",
+                    color: "#4a4a54",
+                    lineHeight: "1.3",
+                  })}
+                >
+                  Wider aperture (smaller f-number) and longer lens =
+                  shallower DoF.
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
