@@ -52,6 +52,7 @@ import {
   moonDirectionVector,
   moonIntensityFactor,
 } from "@/utils/celestialPosition";
+import { getSolarPosition } from "@/utils/solarPosition";
 import { useLUTEffect } from "./useLUTEffect";
 
 const positionECEF = new Vector3();
@@ -149,6 +150,22 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
   const moonIntensity = moonIntensityFactor(moon) * 0.6;
   const moonCastsShadow = shadowsEnabled && moonIntensity > 0.08;
 
+  // Twilight / city skyglow lift. Physically the takram SkyLight goes to
+  // near-zero at night, leaving the city pitch black. For scouting use
+  // that's useless — a film scout wants to see the geometry even at 3 AM.
+  // Add a HemisphereLight whose intensity ramps with sun-below-horizon:
+  // sun above horizon  → no lift (real physics holds)
+  // sun at -6° (civil) → ~25% lift, blue-magenta dusk
+  // sun below -12°     → full lift, warm sodium glow simulating city lights
+  // Top color is cool blue (sky), bottom is warm amber (street-lamp bounce).
+  const sun = useMemo(
+    () => getSolarPosition(date, refLat, refLng),
+    [date, refLat, refLng]
+  );
+  const sunBelowHorizonFactor = Math.max(0, -Math.sin(sun.altitude));
+  // Smoothly ramp 0..1 as sun drops from 0° to -12°.
+  const twilightAmount = Math.min(1, sunBelowHorizonFactor * 5);
+
   const atmosphereRef = useRef<AtmosphereApi>(null);
   const lensFlareRef = useRef<LensFlareEffect>(null);
   const gl = useThree(({ gl }) => gl);
@@ -224,8 +241,20 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
       {/* Star field. Reads the same worldToECEFMatrix from the Atmosphere
           context, so the constellations are oriented correctly for the
           chosen lat/lng/date. Auto-fades behind the lit sky during the day —
-          no manual day/night toggle needed. */}
-      <Stars userData-skipExport={true} />
+          no manual day/night toggle needed.
+          - data: vendor the binary catalog locally so Electron renderer
+            doesn't have to fetch it from GitHub Media's CDN at runtime.
+          - intensity: AGX tonemap crushes near-zero luminance to black, so
+            real-magnitude star brightness disappears at night. Boost
+            substantially so the brightest stars survive the toe of the curve.
+          - pointSize: also bumped so individual star sprites are visible at
+            normal viewing distance. */}
+      <Stars
+        userData-skipExport={true}
+        data="/atmosphere/stars.bin"
+        intensity={20}
+        pointSize={2.5}
+      />
 
       {/* Light-source lighting path. SunLight + SkyLight do the actual
           shading on standard/physical materials; AerialPerspective then
@@ -251,6 +280,16 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
         shadow-normalBias={0.02}
       />
       <SkyLight position={[0, 0, 0]} />
+
+      {/* Twilight / city skyglow. Cool blue sky above, warm sodium below.
+          Only on when the sun is below the horizon so daytime physics
+          stay pure. Intensity caps low — the goal is "now I can see the
+          buildings" not "looks like noon". */}
+      <hemisphereLight
+        args={["#3a4a6e", "#5a3a1e"]}
+        intensity={twilightAmount * 0.35}
+        position={[0, 1, 0]}
+      />
 
       {/* Moonlight. Plain directionalLight (takram's SunLight is hard-bound
           to the sun) positioned along the moon's altitude/azimuth vector
