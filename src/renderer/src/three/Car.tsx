@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useCallback, Suspense } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
-import { useGLTF } from "@react-three/drei";
+import { useFBX } from "@react-three/drei";
 import { SkeletonUtils } from "three-stdlib";
 import * as THREE from "three";
 import { useCarStore } from "@/state/carStore";
@@ -17,14 +17,18 @@ import { GROUND_Y } from "./Space";
 import { MannequinPopup } from "@/components/MannequinPopup";
 
 // Vite serves this from src/renderer/public/models/.
-const MANNEQUIN_URL = "/models/sb_mannequin.glb";
-useGLTF.preload(MANNEQUIN_URL);
+// character.fbx is a stock Mixamo character (rigged SkinnedMesh in
+// canonical Y-bind pose). Because the animation clips in /anim/ are also
+// Mixamo, source and target skeletons share bone names AND bind pose —
+// clips play directly via AnimationMixer with no retarget step.
+const MANNEQUIN_URL = "/models/character.fbx";
+useFBX.preload(MANNEQUIN_URL);
 
-// sb_mannequin.glb is a Mixamo-style rigged skinned mesh. Inspection of the
-// GLB's POSITION accessor shows feet at local y = -1.30 m, head top at
-// y = +0.42 m, with the model origin sitting near the top of the head.
-// Hardcoding the known feet offset is more reliable than reading bbox.
-const MANNEQUIN_FEET_LOCAL_Y = -1.3;
+// Buffer between the mannequin's feet and the local ground origin so the
+// soles don't z-fight with the satellite/road plane. The feet position
+// itself is measured from the loaded model's bounding box at runtime
+// (see MannequinModel) so swapping in a different Mixamo character later
+// doesn't require updating a magic-number constant.
 const MANNEQUIN_GROUND_BUFFER = 0.05;
 
 // All pose ids we'll probe. Locomotion is auto-driven by velocity; the rest
@@ -109,31 +113,19 @@ interface LoadedClip {
 }
 
 /**
- * Raw output from probing a pose's GLB/FBX file. The MannequinModel reads
- * `sourceScene` to extract the SOURCE skeleton (Mixamo Y-Bot bind pose) and
- * the `clip` to feed `SkeletonUtils.retargetClip`, which rewrites every
- * track to match OUR sb_mannequin's SMPL-X bind pose. That fixes the
- * crouched / arms-up artifact you get when Mixamo rotations are applied
- * directly to a different-bind-pose skeleton.
- */
-interface ProbedClip {
-  id: string;
-  sourceScene: THREE.Object3D;
-  sourceClip: THREE.AnimationClip;
-  format: "glb" | "fbx" | "gltf";
-}
-
-/**
  * Probe a single pose by trying multiple filename casings + extensions
- * (.glb / .fbx / .gltf). Returns the loaded scene + first animation clip,
- * or null when no candidate loaded successfully. Retargeting happens
- * downstream in MannequinModel where we have the target skeleton.
+ * (.glb / .fbx / .gltf). Returns the first matching animation clip, or
+ * null when no candidate file resolves.
+ *
+ * Because the character mannequin and the clip files share the canonical
+ * Mixamo skeleton (same bone names, same Y-bind), the clip plays directly
+ * — no SkeletonUtils.retargetClip step is needed. The only massage is
+ * stripping any residual `mixamorigHips.position` track so In-Place
+ * exports stay glued to the ground regardless of authoring quirks.
  */
-function useProbedClip(id: string): ProbedClip | null {
+function useProbedClip(id: string): LoadedClip | null {
   const candidates = React.useMemo(() => buildCandidates(id), [id]);
   const result = useOptionalGLTF(candidates);
-  // Tag the probe outcome once per resolve so we can see in DevTools why
-  // a pose might not show up in the picker.
   React.useEffect(() => {
     if (result == null) {
       console.log(`[Mannequin] probe "${id}": no candidate loaded`);
@@ -144,153 +136,98 @@ function useProbedClip(id: string): ProbedClip | null {
       );
     }
   }, [id, result]);
-  if (!result || result.animations.length === 0) return null;
-  return {
-    id,
-    sourceScene: result.scene,
-    sourceClip: result.animations[0],
-    format: result.format,
-  };
-}
-
-/**
- * Find the first SkinnedMesh in a subtree. The cloned sb_mannequin always
- * has one (it's a full character). The FBX-loaded source scenes have one
- * only when exported "With Skin" — Mixamo "Without Skin" exports contain
- * loose Bone nodes and an embedded animation but no mesh.
- */
-function findSkinnedMesh(root: THREE.Object3D): THREE.SkinnedMesh | null {
-  let found: THREE.SkinnedMesh | null = null;
-  root.traverse((obj) => {
-    if (!found && (obj as THREE.SkinnedMesh).isSkinnedMesh) {
-      found = obj as THREE.SkinnedMesh;
-    }
-  });
-  return found;
-}
-
-/**
- * Build a Skeleton from every Bone object in a subtree. Used as a fallback
- * when an FBX clip was exported "Without Skin" (no SkinnedMesh present) —
- * the bone hierarchy still exists in the scene graph and is enough for
- * SkeletonUtils.retargetClip to play the source animation against.
- */
-function buildSkeletonFromScene(root: THREE.Object3D): THREE.Skeleton | null {
-  const bones: THREE.Bone[] = [];
-  root.traverse((obj) => {
-    if ((obj as THREE.Bone).isBone) bones.push(obj as THREE.Bone);
-  });
-  if (bones.length === 0) return null;
-  return new THREE.Skeleton(bones);
+  return React.useMemo(() => {
+    if (!result || result.animations.length === 0) return null;
+    // Clone before mutating tracks — useOptionalGLTF caches the source
+    // clip object and re-probes shouldn't see a stripped track list.
+    const clip = result.animations[0].clone();
+    clip.name = id;
+    clip.tracks = clip.tracks.filter(
+      (t) => t.name !== "mixamorigHips.position"
+    );
+    return { id, clip };
+  }, [id, result]);
 }
 
 function MannequinModel() {
-  const { scene } = useGLTF(MANNEQUIN_URL);
+  const fbx = useFBX(MANNEQUIN_URL);
 
-  // Clone using SkeletonUtils so the SkinnedMesh's bone references point at
-  // the CLONED bones in this subtree, not the original cached scene's bones.
-  // Plain Object3D.clone() leaves the SkinnedMesh referencing the original
-  // skeleton — any animation applied to the cloned bones would be ignored.
-  // Also locate the head bone for look-at targeting and attach an outline
-  // helper for the selection visual.
-  const { cloned, headBone } = React.useMemo(() => {
-    const c = SkeletonUtils.clone(scene);
+  // Clone using SkeletonUtils so the SkinnedMesh's bone references point
+  // at the CLONED bones in this subtree, not the original cached scene's
+  // bones. Plain Object3D.clone() leaves the SkinnedMesh referencing the
+  // original skeleton — animations on the cloned bones would be ignored.
+  //
+  // While we're walking the tree, also locate the head bone for look-at
+  // targeting, enable shadows, normalize scale if the FBX arrived in
+  // centimeters, and measure the feet position so the outer group can
+  // park on GROUND_Y regardless of the source character's origin.
+  const { cloned, headBone, footLift } = React.useMemo(() => {
+    const c = SkeletonUtils.clone(fbx) as THREE.Object3D;
     let head: THREE.Bone | null = null;
     c.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         const m = obj as THREE.Mesh;
         m.castShadow = true;
         m.receiveShadow = true;
-        // SkinnedMesh frustum culling uses the bind-pose bounds which can be
-        // tight enough that a moving animation pushes vertices off-screen
-        // logically. Disable to be safe — the mannequin is one mesh, so
-        // skipping culling has negligible perf cost.
+        // SkinnedMesh frustum culling uses bind-pose bounds, which can
+        // be tight enough that a moving animation pushes vertices off
+        // screen logically. One mesh — skipping culling is cheap.
         m.frustumCulled = false;
       }
       if (obj.name === "mixamorigHead" && (obj as THREE.Bone).isBone) {
         head = obj as THREE.Bone;
       }
     });
-    return { cloned: c, headBone: head };
-  }, [scene]);
 
-  // Probe every potential clip file. Hooks-rules require fixed call order,
-  // so we map over the static ALL_POSE_IDS list. Missing files return null
-  // gracefully.
-  const probedClips: (ProbedClip | null)[] = ALL_POSE_IDS.map((id) =>
+    // Mixamo FBX exports frequently arrive at 100x (cm-authored, with a
+    // UnitScaleFactor the loader didn't normalize). If the model looks
+    // like a skyscraper, scale the cloned root to meters before measuring.
+    c.updateMatrixWorld(true);
+    const probeBox = new THREE.Box3().setFromObject(c);
+    const probeHeight = probeBox.max.y - probeBox.min.y;
+    if (probeHeight > 10) {
+      c.scale.setScalar(0.01);
+      c.updateMatrixWorld(true);
+    }
+
+    // Derive foot-lift from the (post-rescale) bounds so the outer
+    // group can sit on GROUND_Y and the soles land MANNEQUIN_GROUND_BUFFER
+    // above it. Robust to characters with origin-at-feet, origin-at-hips,
+    // or origin-at-head conventions.
+    const box = new THREE.Box3().setFromObject(c);
+    const lift = -box.min.y + MANNEQUIN_GROUND_BUFFER;
+
+    return { cloned: c, headBone: head, footLift: lift };
+  }, [fbx]);
+
+  // Probe every potential clip file. Hooks-rules require fixed call
+  // order, so we map over the static ALL_POSE_IDS list. Missing files
+  // return null gracefully. Each successful probe is already a clip
+  // ready to attach to the mixer — useProbedClip handles the hip-track
+  // strip inline.
+  const probedClips: (LoadedClip | null)[] = ALL_POSE_IDS.map((id) =>
     useProbedClip(id)
   );
 
-  // Retarget each probed clip from its source skeleton (the Mixamo Y-Bot
-  // bind pose embedded in the FBX/GLB) onto OUR sb_mannequin's SMPL-X bind
-  // pose. SkeletonUtils.retargetClip walks the clip frame-by-frame, plays
-  // it on the source skeleton, then samples each target bone's resulting
-  // local quaternion — so the output clip is authored in our bind frame.
-  // After retargeting we strip the hips position track (Mixamo's "In
-  // Place" workflow assumes the consumer ignores hip translation).
+  // Stable key over the set of available pose ids — downstream memos /
+  // effects only re-fire when a file actually resolves or disappears.
   const availableKey = probedClips
     .map((c, i) => (c ? ALL_POSE_IDS[i] : ""))
     .join(",");
-  const loadedClips: (LoadedClip | null)[] = React.useMemo(() => {
-    const targetMesh = findSkinnedMesh(cloned);
-    if (!targetMesh) return probedClips.map(() => null);
-    return probedClips.map((p) => {
-      if (!p) return null;
-      // Mixamo "With Skin" FBX → SkinnedMesh in the loaded scene.
-      // Mixamo "Without Skin" FBX → only loose Bone nodes; build a
-      // synthetic Skeleton over them so retargetClip has somewhere to
-      // play the source animation.
-      const sourceMesh = findSkinnedMesh(p.sourceScene);
-      const source: THREE.SkinnedMesh | THREE.Skeleton | null =
-        sourceMesh ?? buildSkeletonFromScene(p.sourceScene);
-      if (!source) {
-        console.warn(
-          `[Mannequin] no skeleton found in source for "${p.id}" — skipped`
-        );
-        return null;
-      }
-      try {
-        const retargeted = SkeletonUtils.retargetClip(
-          targetMesh,
-          source,
-          p.sourceClip,
-          {
-            // Hip bone identifier — retargetClip needs this hint to
-            // special-case the root joint's position tracks.
-            hip: "mixamorigHips",
-            // Hip position is relative to its first-frame value (so the
-            // mannequin doesn't teleport when a clip starts).
-            useFirstFramePosition: true,
-            // Sample at cinema rate to match the rest of the rig.
-            fps: 24,
-          } as Record<string, unknown>
-        );
-        retargeted.name = p.id;
-        // Drop hips position entirely so In-Place clips stay grounded on
-        // our skeleton regardless of the source's hip height.
-        retargeted.tracks = retargeted.tracks.filter(
-          (t) => t.name !== "mixamorigHips.position"
-        );
-        console.log(
-          `[Mannequin] retargeted "${p.id}" (${retargeted.tracks.length} tracks)`
-        );
-        return { id: p.id, clip: retargeted };
-      } catch (err) {
-        console.warn(`[Mannequin] retarget failed for ${p.id}:`, err);
-        return null;
-      }
-    });
-  }, [cloned, availableKey]);
 
-  // Push the available pose-ids to the store so the PosePicker UI can show
-  // only what actually loaded + successfully retargeted.
+  // Push the available pose-ids to the store so the PosePicker UI can
+  // show only what actually loaded.
   const setAvailableIds = usePoseStore((s) => s.setAvailableIds);
   React.useEffect(() => {
-    const ids = loadedClips
+    const ids = probedClips
       .filter((c): c is LoadedClip => c != null)
       .map((c) => c.id);
     setAvailableIds(ids);
-  }, [availableKey, setAvailableIds, loadedClips]);
+    // probedClips is read inside the effect; availableKey + the setter
+    // are the actual change drivers, so it's safe to omit probedClips
+    // from the dep list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableKey, setAvailableIds]);
 
   // Build a single AnimationMixer for the cloned root + attach each loaded
   // clip as an AnimationAction we can fade in/out.
@@ -309,7 +246,7 @@ function MannequinModel() {
     const mixer = new THREE.AnimationMixer(cloned);
     mixerRef.current = mixer;
     const map: Record<string, THREE.AnimationAction> = {};
-    for (const c of loadedClips) {
+    for (const c of probedClips) {
       if (!c) continue;
       const action = mixer.clipAction(c.clip);
       action.setLoop(THREE.LoopRepeat, Infinity);
@@ -323,6 +260,9 @@ function MannequinModel() {
       mixer.stopAllAction();
       mixerRef.current = null;
     };
+    // probedClips is read here; availableKey captures the set of non-null
+    // entries, which is the only signal that should rebuild the mixer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloned, availableKey]);
 
   // Subscribe to motion + pose state. Each frame we choose the right action
@@ -389,11 +329,10 @@ function MannequinModel() {
     }
   });
 
-  // Lift the inner primitive so the model's feet (at local y = -1.30) land
-  // 5 cm above the group's local origin (which sits on GROUND_Y in Car).
-  const footLift = -MANNEQUIN_FEET_LOCAL_Y + MANNEQUIN_GROUND_BUFFER;
-
-  // Mannequin is authored facing +Z; rotate 180° so forward = -Z.
+  // Mannequin is authored facing +Z (Mixamo convention); rotate 180° so
+  // forward = -Z to match scout3d's drive-mode camera. footLift is
+  // measured per-character in the useMemo above so the feet sit on
+  // GROUND_Y regardless of the source FBX's origin convention.
   return (
     <primitive
       object={cloned}
