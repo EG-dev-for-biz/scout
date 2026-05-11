@@ -11,6 +11,7 @@ import { StyleSelector } from "@/components/StylePanel";
 import { RenderModeSelector } from "@/components/RenderModeSelector";
 import { CaptureShotButton } from "@/components/CaptureShotButton";
 import { LensPicker } from "@/components/LensPicker";
+import { PosePicker } from "@/components/PosePicker";
 import { RestyleModal } from "@/components/RestyleModal";
 import { PaintSceneButton } from "@/components/PaintSceneButton";
 import { PaintBuildingsButton } from "@/components/PaintBuildingsButton";
@@ -187,6 +188,9 @@ function TopBar({
         {areas.length > 0 && (
           <>
             <div css={css({ width: "1px", height: "16px", backgroundColor: "#2a2a2e" })} />
+
+            {/* Mannequin pose picker (disabled while in drive mode) */}
+            <PosePicker />
 
             {/* Car mode */}
             <TopBarButton
