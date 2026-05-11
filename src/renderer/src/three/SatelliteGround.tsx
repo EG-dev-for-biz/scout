@@ -239,7 +239,8 @@ export function ProviderAttribution() {
       <div
         style={{
           position: "absolute",
-          bottom: "8px",
+          // Sit just above the bottom HUD strip (28 px tall + 6 px gap).
+          bottom: "36px",
           right: "12px",
           fontSize: "10px",
           color: "#a0a0aa",
@@ -261,7 +262,7 @@ export function ProviderAttribution() {
     <div
       style={{
         position: "absolute",
-        bottom: "8px",
+        bottom: "36px",
         right: "12px",
         fontSize: "10px",
         color: "#a0a0aa",

@@ -38,26 +38,39 @@ export function RenderModeSelector() {
           display: "flex",
           alignItems: "center",
           gap: "5px",
-          backgroundColor: "#1e1e22",
-          border: "1px solid #2a2a2e",
-          borderRadius: "6px",
+          backgroundColor: "#13131a",
+          border: "1px solid #2a2a30",
+          borderRadius: "4px",
           padding: "5px 9px",
-          color: "#a0a0aa",
-          fontSize: "11px",
-          fontWeight: "500",
+          color: "#a8a8b0",
+          fontSize: "10px",
+          fontWeight: 600,
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+          fontFamily:
+            "-apple-system, 'SF Pro Display', 'Inter', system-ui, sans-serif",
           cursor: "pointer",
-          transition: "0.15s",
+          boxShadow:
+            "inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 0 rgba(0,0,0,0.6)",
+          transition: "120ms cubic-bezier(0.4, 0, 0.2, 1)",
           ":hover": {
-            backgroundColor: "#2a2a2e",
+            backgroundColor: "#1c1c24",
+            borderColor: "#3a3a44",
             color: "#e8e8ec",
+          },
+          ":active": {
+            boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)",
+            backgroundColor: "#0e0e14",
           },
         })}
         onClick={() => setOpen(!open)}
         title="Switch render mode"
       >
-        <span css={css({ color: "#3b82f6", display: "flex" })}>{ICON_FOR_MODE[mode]}</span>
+        <span css={css({ color: "#3b82f6", display: "flex" })}>
+          {ICON_FOR_MODE[mode]}
+        </span>
         <span css={css({ color: "#e8e8ec" })}>{SHORT_LABEL[mode]}</span>
-        <ChevronDown size={11} />
+        <ChevronDown size={11} color="#6b6b78" />
       </button>
 
       {open && (

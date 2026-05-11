@@ -32,6 +32,14 @@ interface ToolbarButtonProps {
   danger?: boolean;
 }
 
+// Camera-body chrome shared across the top toolbar. Cine-camera buttons
+// are matte-black with a faint top-edge highlight and a bottom-edge
+// shadow to read as physically convex; pressing them snaps into an
+// inset shadow as if the button just clicked into the body. The
+// uppercase, slightly-spaced monospace label is the visual cue that
+// borrows the most from real camera HUDs (Arri Alexa OLED, RED touch,
+// DJI Ronin). Accent (amber) = save / dirty-state callout; danger =
+// destructive (red border, transparent fill until hover).
 function ToolbarButton({ onClick, title, children, accent, danger }: ToolbarButtonProps) {
   return (
     <button
@@ -39,18 +47,31 @@ function ToolbarButton({ onClick, title, children, accent, danger }: ToolbarButt
         display: "flex",
         alignItems: "center",
         gap: "5px",
-        backgroundColor: accent ? "#3b82f6" : danger ? "transparent" : "#1e1e22",
-        border: `1px solid ${accent ? "#2563eb" : danger ? "#ef4444" : "#2a2a2e"}`,
-        borderRadius: "6px",
-        padding: "5px 10px",
-        color: accent ? "#fff" : danger ? "#ef4444" : "#a0a0aa",
-        fontSize: "11px",
-        fontWeight: "500",
+        backgroundColor: accent ? "#3a2a14" : danger ? "transparent" : "#13131a",
+        border: `1px solid ${accent ? "#c89048" : danger ? "#7a2828" : "#2a2a30"}`,
+        borderRadius: "4px",
+        padding: "5px 9px",
+        color: accent ? "#ffb968" : danger ? "#ef4444" : "#a8a8b0",
+        fontSize: "10px",
+        fontWeight: 600,
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
+        fontFamily:
+          "-apple-system, 'SF Pro Display', 'Inter', system-ui, sans-serif",
         cursor: "pointer",
-        transition: "0.15s",
+        boxShadow:
+          "inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 0 rgba(0,0,0,0.6)",
+        transition: "120ms cubic-bezier(0.4, 0, 0.2, 1)",
         ":hover": {
-          backgroundColor: accent ? "#2563eb" : danger ? "#ef444422" : "#2a2a2e",
-          color: accent ? "#fff" : "#e8e8ec",
+          backgroundColor: accent ? "#4a3418" : danger ? "#3a1414" : "#1c1c24",
+          borderColor: accent ? "#e0a050" : danger ? "#ef4444" : "#3a3a44",
+          color: accent ? "#ffd098" : danger ? "#ff6464" : "#e8e8ec",
+          boxShadow:
+            "inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 0 rgba(0,0,0,0.6)",
+        },
+        ":active": {
+          boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)",
+          backgroundColor: accent ? "#2a1c08" : danger ? "#2a0c0c" : "#0e0e14",
         },
       })}
       onClick={onClick}
@@ -218,25 +239,59 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
         padding: "0 8px",
       })}
     >
-      {/* Project name + dirty indicator */}
+      {/* Project name slate. Reads like an LCD readout on the camera
+          body — small uppercase letters with a pulsing red "rec dot"
+          when there are unsaved changes. */}
       <div
         css={css({
-          fontSize: "12px",
-          color: isDirty ? "#f59e0b" : "#6b6b78",
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
           marginRight: "4px",
-          fontWeight: "500",
-          maxWidth: "160px",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
+          maxWidth: "180px",
+          padding: "3px 8px",
+          backgroundColor: "#0a0a0e",
+          border: "1px solid #1e1e22",
+          borderRadius: "3px",
+          boxShadow: "inset 0 1px 2px rgba(0,0,0,0.5)",
         })}
         title={projectPath || "Unsaved project"}
       >
-        {isDirty ? "●  " : ""}
-        {projectName}
+        <span
+          css={css({
+            width: "6px",
+            height: "6px",
+            borderRadius: "50%",
+            backgroundColor: isDirty ? "#ef4444" : "#22c55e",
+            boxShadow: isDirty
+              ? "0 0 6px rgba(239,68,68,0.7)"
+              : "0 0 4px rgba(34,197,94,0.4)",
+            flexShrink: 0,
+            animation: isDirty ? "pulse 1.4s ease-in-out infinite" : "none",
+            "@keyframes pulse": {
+              "0%, 100%": { opacity: 1 },
+              "50%": { opacity: 0.45 },
+            },
+          })}
+        />
+        <span
+          css={css({
+            fontSize: "10px",
+            fontWeight: 600,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            color: isDirty ? "#ffb968" : "#a8a8b0",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontFamily: "-apple-system, 'SF Mono', Menlo, monospace",
+          })}
+        >
+          {projectName}
+        </span>
       </div>
 
-      <div css={css({ width: "1px", height: "16px", backgroundColor: "#2a2a2e" })} />
+      <Divider />
 
       <ToolbarButton onClick={handleNew} title="New project">
         <FilePlus size={12} /> New
@@ -260,7 +315,7 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
         </ToolbarButton>
       )}
 
-      <div css={css({ width: "1px", height: "16px", backgroundColor: "#2a2a2e" })} />
+      <Divider />
 
       <ToolbarButton onClick={() => triggerGlbExport()} title="Export scene as GLB">
         <Download size={12} /> GLB
@@ -277,5 +332,22 @@ export function ProjectToolbar({ onNew }: ProjectToolbarProps) {
         <ClipboardList size={12} /> Shot List
       </ToolbarButton>
     </div>
+  );
+}
+
+// Faint vertical separator between toolbar button groups — mimics the
+// engraved divider lines on a cine camera body that visually cluster
+// related controls (record / playback / menu).
+function Divider() {
+  return (
+    <div
+      css={css({
+        width: "1px",
+        height: "18px",
+        background:
+          "linear-gradient(to bottom, transparent, #2a2a30 30%, #2a2a30 70%, transparent)",
+        margin: "0 2px",
+      })}
+    />
   );
 }

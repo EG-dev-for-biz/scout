@@ -75,41 +75,92 @@ export function LensPicker() {
 
   return (
     <div ref={rootRef} css={css({ position: "relative" })}>
+      {/* Viewfinder lens readout. Mimics the OLED-side of a cine prime
+          or the front display of a still camera: large focal-length
+          digit, a pipe, a compact aperture stop, and a tiny rotating
+          aperture-ring icon for visual gravity. Reads at a glance from
+          across the screen — exactly what a DP needs. */}
       <button
         onClick={() => setOpen((v) => !v)}
         title="Pick a lens"
         css={css({
           display: "flex",
           alignItems: "center",
-          gap: "5px",
-          backgroundColor: "#1e1e22",
-          border: "1px solid #2a2a2e",
-          borderRadius: "6px",
-          padding: "5px 9px",
+          gap: "7px",
+          backgroundColor: "#13131a",
+          border: "1px solid #2a2a30",
+          borderRadius: "4px",
+          padding: "3px 9px 3px 7px",
           color: "#e8e8ec",
-          fontSize: "11px",
-          fontWeight: "500",
           cursor: "pointer",
-          transition: "0.15s",
+          boxShadow:
+            "inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 0 rgba(0,0,0,0.6)",
+          transition: "120ms cubic-bezier(0.4, 0, 0.2, 1)",
           ":hover": {
-            backgroundColor: "#2a2a2e",
-            borderColor: "#3b82f6",
+            backgroundColor: "#1c1c24",
+            borderColor: "#3a3a44",
+            boxShadow:
+              "inset 0 1px 0 rgba(255,255,255,0.06), 0 0 8px rgba(59,130,246,0.18), 0 1px 0 rgba(0,0,0,0.6)",
+          },
+          ":active": {
+            boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)",
+            backgroundColor: "#0e0e14",
           },
         })}
       >
-        <Aperture size={12} color="#3b82f6" />
-        <span>Lens</span>
+        <Aperture
+          size={14}
+          color="#3b82f6"
+          css={css({
+            // Slow rotation when DoF is on — implies the aperture
+            // mechanism is active. Off when DoF is off so the icon
+            // reads as a static badge.
+            animation: dofEnabled ? "lensSpin 6s linear infinite" : "none",
+            "@keyframes lensSpin": {
+              from: { transform: "rotate(0deg)" },
+              to: { transform: "rotate(360deg)" },
+            },
+          })}
+        />
         <span
           css={css({
-            color: "#6b6b78",
-            fontFamily: "monospace",
-            fontSize: "10px",
-            minWidth: "32px",
-            textAlign: "right",
+            display: "flex",
+            alignItems: "baseline",
+            gap: "2px",
+            fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+            fontWeight: 700,
+            color: "#e8e8ec",
+            lineHeight: 1,
           })}
         >
-          {liveFocal}mm
+          <span css={css({ fontSize: "15px", letterSpacing: "0.01em" })}>
+            {liveFocal}
+          </span>
+          <span css={css({ fontSize: "9px", color: "#7a7a86" })}>mm</span>
         </span>
+        {dofEnabled && (
+          <>
+            <span
+              css={css({
+                width: "1px",
+                height: "14px",
+                background:
+                  "linear-gradient(to bottom, transparent, #2a2a30 30%, #2a2a30 70%, transparent)",
+              })}
+            />
+            <span
+              css={css({
+                fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+                fontSize: "10px",
+                fontWeight: 600,
+                color: "#d97757",
+                lineHeight: 1,
+              })}
+            >
+              f/{apertureF % 1 === 0 ? apertureF.toFixed(0) : apertureF.toFixed(1)}
+            </span>
+          </>
+        )}
         <ChevronDown
           size={10}
           color="#6b6b78"

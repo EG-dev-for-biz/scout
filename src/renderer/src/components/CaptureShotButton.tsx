@@ -48,29 +48,64 @@ export function CaptureShotButton() {
       css={css({
         display: "flex",
         alignItems: "center",
-        gap: "5px",
-        backgroundColor: current ? "#1e1e22" : "#15151a",
-        border: "1px solid #2a2a2e",
-        borderRadius: "6px",
-        padding: "5px 9px",
-        color: current ? "#e8e8ec" : "#4a4a54",
-        fontSize: "11px",
-        fontWeight: "500",
+        gap: "6px",
+        position: "relative",
+        // Shutter-release styling. Always-visible red dot reads as the
+        // record light; on hover the dot brightens + the button gains a
+        // subtle red glow. Disabled state keeps the layout but desaturates
+        // and dims everything.
+        backgroundColor: current ? "#13131a" : "#0e0e12",
+        border: `1px solid ${current ? "#2a2a30" : "#1c1c24"}`,
+        borderRadius: "4px",
+        padding: "5px 11px",
+        color: current ? "#e8e8ec" : "#3a3a40",
+        fontSize: "10px",
+        fontWeight: 700,
+        letterSpacing: "0.07em",
+        textTransform: "uppercase",
+        fontFamily:
+          "-apple-system, 'SF Pro Display', 'Inter', system-ui, sans-serif",
         cursor: current ? "pointer" : "not-allowed",
-        transition: "0.15s",
+        boxShadow:
+          "inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 0 rgba(0,0,0,0.6)",
+        transition: "120ms cubic-bezier(0.4, 0, 0.2, 1)",
         ":hover:not(:disabled)": {
-          backgroundColor: "#2a2a2e",
-          borderColor: "#3b82f6",
+          backgroundColor: "#1c1c24",
+          borderColor: "#a83838",
+          color: "#fff",
+          boxShadow:
+            "inset 0 1px 0 rgba(255,180,180,0.08), 0 0 10px rgba(220,38,38,0.45), 0 1px 0 rgba(0,0,0,0.6)",
+        },
+        ":active:not(:disabled)": {
+          boxShadow: "inset 0 1px 3px rgba(0,0,0,0.6)",
+          backgroundColor: "#0e0e14",
         },
       })}
     >
-      <Camera size={12} color={current ? "#3b82f6" : "#4a4a54"} />
-      <span>Capture Shot</span>
+      {/* Red shutter LED — always on when the button is active. */}
       <span
         css={css({
-          color: "#6b6b78",
-          fontFamily: "monospace",
-          fontSize: "10px",
+          width: "7px",
+          height: "7px",
+          borderRadius: "50%",
+          backgroundColor: current ? "#ef4444" : "#3a1a1a",
+          boxShadow: current ? "0 0 6px rgba(239,68,68,0.6)" : "none",
+          flexShrink: 0,
+        })}
+      />
+      <Camera size={11} color={current ? "#e8e8ec" : "#3a3a40"} />
+      <span>Roll</span>
+      <span
+        css={css({
+          color: current ? "#7a7a86" : "#2a2a30",
+          fontFamily: "'SF Mono', Menlo, Consolas, monospace",
+          fontSize: "9px",
+          fontWeight: 600,
+          letterSpacing: "0.04em",
+          textTransform: "none",
+          paddingLeft: "3px",
+          borderLeft: `1px solid ${current ? "#2a2a30" : "#1c1c24"}`,
+          marginLeft: "1px",
         })}
       >
         {focalLabel}

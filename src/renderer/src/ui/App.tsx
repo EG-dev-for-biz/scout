@@ -21,6 +21,7 @@ import { TimeControls } from "@/components/TimeControls";
 import { WeatherControls } from "@/components/WeatherControls";
 import { MoodBookmarks } from "@/components/MoodBookmarks";
 import { ViewportAspectControl } from "@/components/ViewportAspectControl";
+import { ViewportHUD } from "@/components/ViewportHUD";
 import { Modal } from "@/components/modal/Modal";
 import { Column } from "@/components/flex/Column";
 import { Row } from "@/components/flex/Row";
@@ -79,8 +80,15 @@ function TopBar({
         display: "flex",
         alignItems: "center",
         height: "44px",
-        backgroundColor: "#17171a",
-        borderBottom: "1px solid #2a2a2e",
+        // Matte camera body — subtle vertical gradient (lighter at top,
+        // a hair darker at bottom) reads as a slightly bevelled metal
+        // surface. The bottom border is double-stacked: a faint inner
+        // highlight then the harder edge line, mimicking the way a real
+        // chassis seam catches light.
+        background:
+          "linear-gradient(to bottom, #18181c 0%, #131318 100%)",
+        borderBottom: "1px solid #0a0a0e",
+        boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.03)",
         paddingLeft: "0",
         flexShrink: 0,
         WebkitAppRegion: "drag" as any,
@@ -90,19 +98,32 @@ function TopBar({
       {/* Drag region spacer for macOS traffic lights */}
       <div css={css({ width: "80px", flexShrink: 0 })} />
 
-      {/* App identity */}
+      {/* App identity — reads like the brand badge etched into a cine
+          camera's side plate. Uppercase + extra letter-spacing matches
+          the rest of the HUD vocabulary. */}
       <div
         css={css({
           display: "flex",
           alignItems: "center",
-          gap: "6px",
+          gap: "7px",
           paddingRight: "16px",
-          borderRight: "1px solid #2a2a2e",
+          borderRight: "1px solid #0a0a0e",
+          boxShadow: "1px 0 0 rgba(255,255,255,0.03)",
           WebkitAppRegion: "no-drag" as any,
         })}
       >
         <Box size={14} color="#3b82f6" />
-        <span css={css({ fontSize: "13px", fontWeight: "700", color: "#e8e8ec" })}>
+        <span
+          css={css({
+            fontSize: "11px",
+            fontWeight: 700,
+            color: "#e8e8ec",
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            fontFamily:
+              "-apple-system, 'SF Pro Display', 'Inter', system-ui, sans-serif",
+          })}
+        >
           Scout3D
         </span>
       </div>
@@ -161,7 +182,7 @@ function TopBar({
         {/* Paint Buildings — projective texturing on buildings from current view */}
         <PaintBuildingsButton />
 
-        <div css={css({ width: "1px", height: "16px", backgroundColor: "#2a2a2e" })} />
+        <TopBarDivider />
 
         {/* Render mode selector */}
         <RenderModeSelector />
@@ -169,7 +190,7 @@ function TopBar({
         {/* Style selector dropdown */}
         <StyleSelector />
 
-        <div css={css({ width: "1px", height: "16px", backgroundColor: "#2a2a2e" })} />
+        <TopBarDivider />
 
         {/* Toggle left panel */}
         <TopBarButton
@@ -191,7 +212,7 @@ function TopBar({
 
         {areas.length > 0 && (
           <>
-            <div css={css({ width: "1px", height: "16px", backgroundColor: "#2a2a2e" })} />
+            <TopBarDivider />
 
             {/* Mannequin pose picker (disabled while in drive mode) */}
             <PosePicker />
@@ -229,6 +250,11 @@ function TopBar({
   );
 }
 
+// Cine-camera body button. Same matte-black-with-bevel chrome as the
+// ProjectToolbar buttons, with an extra "active LED" affordance — when
+// a control is toggled on (e.g. drive mode, annotations open), a small
+// cyan dot lights up before the icon. Accent (red) gets a glow halo
+// for record-style emphasis.
 function TopBarButton({
   onClick,
   title,
@@ -249,26 +275,78 @@ function TopBarButton({
       css={css({
         display: "flex",
         alignItems: "center",
-        gap: "4px",
+        gap: "5px",
+        position: "relative",
         backgroundColor: accent
-          ? "#3b82f6"
+          ? "#3a1a1a"
           : active
-          ? "#2a2a2e"
-          : "transparent",
-        border: `1px solid ${active || accent ? "#3a3a3e" : "transparent"}`,
-        borderRadius: "6px",
+            ? "#1c1c24"
+            : "#13131a",
+        border: `1px solid ${
+          accent ? "#a83838" : active ? "#3a3a44" : "#2a2a30"
+        }`,
+        borderRadius: "4px",
         padding: "4px 8px",
-        color: accent ? "#fff" : active ? "#e8e8ec" : "#6b6b78",
+        color: accent ? "#ff7a7a" : active ? "#e8e8ec" : "#a8a8b0",
+        fontSize: "10px",
+        fontWeight: 600,
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
+        fontFamily:
+          "-apple-system, 'SF Pro Display', 'Inter', system-ui, sans-serif",
         cursor: "pointer",
-        transition: "0.15s",
+        boxShadow: accent
+          ? "inset 0 1px 0 rgba(255,180,180,0.08), 0 0 8px rgba(220,38,38,0.35), 0 1px 0 rgba(0,0,0,0.6)"
+          : "inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 0 rgba(0,0,0,0.6)",
+        transition: "120ms cubic-bezier(0.4, 0, 0.2, 1)",
         ":hover": {
-          backgroundColor: accent ? "#2563eb" : "#2a2a2e",
-          color: "#e8e8ec",
+          backgroundColor: accent
+            ? "#4a1c1c"
+            : active
+              ? "#24242c"
+              : "#1c1c24",
+          borderColor: accent ? "#cc4848" : "#3a3a44",
+          color: accent ? "#ff9898" : "#e8e8ec",
+        },
+        ":active": {
+          boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)",
+          backgroundColor: accent ? "#2a0e0e" : "#0e0e14",
         },
       })}
     >
+      {/* Active LED — small cyan dot when toggled on. Appears
+          before any children so the user reads "[•] LABEL" left-to-right. */}
+      {active && !accent && (
+        <span
+          css={css({
+            width: "5px",
+            height: "5px",
+            borderRadius: "50%",
+            backgroundColor: "#3b82f6",
+            boxShadow: "0 0 5px rgba(59,130,246,0.7)",
+            flexShrink: 0,
+          })}
+        />
+      )}
       {children}
     </button>
+  );
+}
+
+// Faint vertical separator between top-bar button groups. Same gradient
+// idiom as ProjectToolbar's Divider — visually clusters related camera
+// controls (eg. "shot" group vs "view" group) without a hard line.
+function TopBarDivider() {
+  return (
+    <div
+      css={css({
+        width: "1px",
+        height: "20px",
+        background:
+          "linear-gradient(to bottom, transparent, #2a2a30 25%, #2a2a30 75%, transparent)",
+        margin: "0 3px",
+      })}
+    />
   );
 }
 
@@ -644,6 +722,7 @@ function ViewportFrame({
         <DriveHUD />
         <PaintFlowOverlay />
         <ViewportAspectControl />
+        <ViewportHUD />
 
         {/* Pending pin instruction overlay */}
         {pendingPinType && (
