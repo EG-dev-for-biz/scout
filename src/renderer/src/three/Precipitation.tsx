@@ -17,7 +17,7 @@ import {
 } from "@/state/weatherStore";
 import { useTimeStore } from "@/state/timeStore";
 import { useAreaStore } from "@/state/areaStore";
-import { useCameraStore } from "@/state/cameraStore";
+import { useCameraStore, fovToFocalLength, physicalFocusRange } from "@/state/cameraStore";
 import {
   getSolarPosition,
   solarDirectionVector,
@@ -476,10 +476,14 @@ export function Precipitation() {
           )
         : 50;
       material.uniforms.uFocusDistance.value = focusDist;
-      // Half-range mirrors the post-process pass: worldFocusRange =
-      // max(2, apertureF * 4). Wider aperture (smaller f-number) gives
-      // a tighter in-focus band — exactly inverse of physical DoF.
-      material.uniforms.uFocusHalfRange.value = Math.max(2, apertureF * 4) / 2;
+      // Use the SAME physical DoF math as the post-process pass so a
+      // raindrop's "in-focus / bokeh" classification matches what the
+      // ground / building behind it does. At wide-normal focal lengths
+      // this gives a huge focus band, so distant rain stays as streaks
+      // (not bokeh discs) the way a real lens would render it.
+      const focal = fovToFocalLength(useCameraStore.getState().userFovDeg);
+      const range = physicalFocusRange(focal, apertureF, focusDist);
+      material.uniforms.uFocusHalfRange.value = range / 2;
     }
   });
 

@@ -23,6 +23,7 @@ import {
   useCameraStore,
   bokehScaleFromLens,
   fovToFocalLength,
+  physicalFocusRange,
 } from "@/state/cameraStore";
 import {
   getSolarPosition,
@@ -47,14 +48,24 @@ export function PostFX() {
   const lutIntensity = useCinemaStore((s) => s.lutIntensity);
   const lutEffect = useLUTEffect(lutEnabled ? lutUrl : null, lutIntensity);
 
-  // Depth of field (legacy path mirror of AtmosphericRig).
+  // Depth of field (legacy path mirror of AtmosphericRig). Uses the
+  // shared hyperfocal-aware physicalFocusRange so wide-to-normal lenses
+  // keep the horizon sharp the way a real camera would.
   const dofEnabled = useCameraStore((s) => s.dofEnabled);
   const apertureF = useCameraStore((s) => s.apertureF);
   const focusTarget = useCameraStore((s) => s.focusTarget);
+  const cameraSnapshot = useCameraStore((s) => s.current);
   const userFovDeg = useCameraStore((s) => s.userFovDeg);
   const focalMM = fovToFocalLength(userFovDeg);
   const bokehScale = bokehScaleFromLens(focalMM, apertureF);
-  const worldFocusRange = Math.max(2, apertureF * 4);
+  const focusDistanceM = useMemo(() => {
+    if (!focusTarget || !cameraSnapshot) return 50;
+    const dx = cameraSnapshot.position[0] - focusTarget[0];
+    const dy = cameraSnapshot.position[1] - focusTarget[1];
+    const dz = cameraSnapshot.position[2] - focusTarget[2];
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }, [focusTarget, cameraSnapshot]);
+  const worldFocusRange = physicalFocusRange(focalMM, apertureF, focusDistanceM);
 
   // Weather store — new tier-1 atmospheric effects mirrored from
   // AtmosphericRig so they work identically in the legacy render path.
@@ -136,10 +147,10 @@ export function PostFX() {
         )}
 
         {/* Atmospheric medium — same two-instance fog as AtmosphericRig.
-            Both gate on store density==0 internally so leaving them
-            mounted is cheap. */}
-        <VolumetricFog kind="ground" />
-        <VolumetricFog kind="haze" />
+            Conditionally mounted so depth-attribute Pass count stays
+            low when the user isn't using fog/haze. */}
+        {fogEnabled ? <VolumetricFog kind="ground" /> : <></>}
+        {hazeEnabled ? <VolumetricFog kind="haze" /> : <></>}
 
         {/* God rays — radial blur around the SunMarker. */}
         {godRaysActive ? (

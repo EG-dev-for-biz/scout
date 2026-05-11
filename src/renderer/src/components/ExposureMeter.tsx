@@ -41,6 +41,14 @@ export function ExposureMeter() {
   const histCanvasRef = useRef<HTMLCanvasElement>(null);
   // Offscreen sampling canvas — reused across ticks to avoid alloc churn.
   const sampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Pre-allocated histogram buffer reused every tick. Allocating a new
+  // Uint32Array each sample wasn't catastrophic but it was 256 bytes ×
+  // 4 Hz × N seconds of churn that the GC had to keep clearing.
+  const histBufRef = useRef<Uint32Array>(new Uint32Array(HIST_BINS));
+  // Throttle React re-renders for the clipped-percentage readout. The
+  // raw value updates 4×/s, but the user sees the same digit-resolution
+  // result; only invalidate state when it actually changes.
+  const lastClipPctRef = useRef<number>(-1);
 
   // Sampling loop. Runs while NOT collapsed (no point computing a
   // histogram nobody is looking at).
@@ -94,8 +102,9 @@ export function ExposureMeter() {
     }
     const img = ctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H).data;
 
-    // Build histogram + count clipped pixels.
-    const hist = new Uint32Array(HIST_BINS);
+    // Reuse the histogram buffer instead of allocating per tick.
+    const hist = histBufRef.current;
+    hist.fill(0);
     let clipped = 0;
     const total = SAMPLE_W * SAMPLE_H;
     for (let i = 0; i < img.length; i += 4) {
@@ -108,7 +117,13 @@ export function ExposureMeter() {
       hist[bin]++;
       if (luma > 0.95) clipped++;
     }
-    setClipPct(Math.round((clipped / total) * 1000) / 10);
+    const nextClipPct = Math.round((clipped / total) * 1000) / 10;
+    // Only invalidate React state when the displayed value actually
+    // changes. Cuts most of the 4 Hz re-render churn.
+    if (nextClipPct !== lastClipPctRef.current) {
+      lastClipPctRef.current = nextClipPct;
+      setClipPct(nextClipPct);
+    }
 
     // Render histogram canvas.
     if (mode === "hist") {

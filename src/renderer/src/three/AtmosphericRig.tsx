@@ -49,6 +49,7 @@ import {
   useCameraStore,
   bokehScaleFromLens,
   fovToFocalLength,
+  physicalFocusRange,
 } from "@/state/cameraStore";
 import {
   getMoonPosition,
@@ -99,11 +100,17 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
   const shadowsEnabled = useTimeStore((s) => s.shadowsEnabled);
 
   // Weather store — drives clouds wind, volumetric fog, god rays.
-  // Fog + haze enabled flags live inside the <VolumetricFog> component
-  // itself, which collapses density to zero when disabled. The store
-  // godRays flag is read here because we need it to gate the SunMarker
-  // mesh and the GodRays effect at the EffectComposer level.
+  // We READ the enable flags here so we can SKIP mounting the
+  // VolumetricFog passes entirely when they're off. Keeping all the
+  // depth-reading effects mounted simultaneously was producing
+  // "Read and write depth stencil attachments cannot be the same image"
+  // GL errors in some pipeline orderings — especially when paired with
+  // takram's <Clouds>, which also samples scene depth for occlusion.
+  // Gating the mounts trims the active depth-attribute Pass count when
+  // the user isn't using these features.
   const wind = useWeatherStore((s) => s.wind);
+  const fogEnabled = useWeatherStore((s) => s.fog.enabled);
+  const hazeEnabled = useWeatherStore((s) => s.haze.enabled);
   const godRaysState = useWeatherStore((s) => s.godRays);
   const sunStrength = useWeatherStore((s) => s.sunStrength);
 
@@ -141,13 +148,25 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
   const dofEnabled = useCameraStore((s) => s.dofEnabled);
   const apertureF = useCameraStore((s) => s.apertureF);
   const focusTarget = useCameraStore((s) => s.focusTarget);
+  const cameraSnapshot = useCameraStore((s) => s.current);
   const userFovDeg = useCameraStore((s) => s.userFovDeg);
   const focalMM = fovToFocalLength(userFovDeg);
   const bokehScale = bokehScaleFromLens(focalMM, apertureF);
-  // World-space focus band width — wider aperture (smaller N) = narrower
-  // band, tighter aperture = wider band. Tuned to read naturally on
-  // typical scouting distances (10..500 m).
-  const worldFocusRange = Math.max(2, apertureF * 4);
+  // World-space focus band width derived from real DoF math: hyperfocal
+  // distance H = f²/(N·c). For wide-to-normal lenses at typical scouting
+  // distances, H is small enough that the focus target sits past it →
+  // far limit goes to infinity and clouds/horizon stay sharp. For
+  // telephotos H is huge, so the band stays narrow and only the subject
+  // resolves. This is what makes a 24mm at f/2.4 leave the sky visible
+  // while a 200mm at f/2.4 isolates the subject.
+  const focusDistanceM = useMemo(() => {
+    if (!focusTarget || !cameraSnapshot) return 50; // matches DoF default
+    const dx = cameraSnapshot.position[0] - focusTarget[0];
+    const dy = cameraSnapshot.position[1] - focusTarget[1];
+    const dz = cameraSnapshot.position[2] - focusTarget[2];
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }, [focusTarget, cameraSnapshot]);
+  const worldFocusRange = physicalFocusRange(focalMM, apertureF, focusDistanceM);
   // Anamorphic preset auto-enables lens flare and biases ChromaticAberration
   // and Noise so the rig reads as cinema rather than digital flat.
   const lensFlareEnabled = lensFlareUserToggle || anamorphicEnabled;
@@ -451,11 +470,13 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
 
         {/* Volumetric fog — two instances of the same effect with
             different parameter presets. Ground fog is low and dense;
-            haze is tall, thin, and sun-coupled. Both gate on density==0
-            internally when their store flags are off, so leaving them
-            mounted is cheap and avoids EffectMaterial recompiles. */}
-        <VolumetricFog kind="ground" />
-        <VolumetricFog kind="haze" />
+            haze is tall, thin, and sun-coupled. Conditionally mounted
+            so depth-attribute Pass count stays low when the user
+            isn't using fog/haze — combined with the takram <Clouds>
+            depth sampling, an always-mounted pair caused GL depth
+            stencil attachment conflicts. */}
+        {fogEnabled ? <VolumetricFog kind="ground" /> : <></>}
+        {hazeEnabled ? <VolumetricFog kind="haze" /> : <></>}
 
         {/* God rays — radial blur around the SunMarker mesh. Gated by
             sun altitude so we don't render an upside-down bar at night.
