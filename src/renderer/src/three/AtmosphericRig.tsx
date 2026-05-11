@@ -13,7 +13,7 @@ import {
   Pixelation,
   GodRays,
 } from "@react-three/postprocessing";
-import { BlendFunction, KernelSize, Resolution, ToneMappingMode } from "postprocessing";
+import { BlendFunction, KernelSize, ToneMappingMode } from "postprocessing";
 import type { LensFlareEffect } from "@takram/three-geospatial-effects";
 import { HalfFloatType, Matrix4, Mesh, NoToneMapping, Vector2, Vector3 } from "three";
 import {
@@ -599,13 +599,12 @@ export function AtmosphericRig({ children }: { children: ReactNode }) {
         )}
 
         {lensFlareEnabled ? (
-          // resolutionScale defaults to 0.5 (half-res), which produces the
-          // visible "pixelated" / blocky lens-flare halos on bright skies.
-          // Render at full resolution and grab a ref so the useEffect above
-          // can crank the internal Kawase pre-blur kernel up to HUGE — that
-          // softens the flare from "stair-stepped block" into a cinematic
-          // diffuse glow without losing intensity.
-          <LensFlare ref={lensFlareRef} resolution={Resolution.HIGH} />
+          // Grab a ref so the useEffect above can crank the internal
+          // Kawase pre-blur kernel up to HUGE — that softens the flare
+          // from a stair-stepped block into a cinematic diffuse glow.
+          // Resolution scale stays at the LensFlare default (0.5 / half
+          // res); the kernel boost is what masks the half-res aliasing.
+          <LensFlare ref={lensFlareRef} />
         ) : (
           <></>
         )}
