@@ -43,11 +43,21 @@ import os
 import sys
 import time
 import traceback
+from pathlib import Path
 from typing import Any
 
 # Force MPS fallback BEFORE torch imports. Some SF3D ops aren't implemented
 # on MPS yet; PyTorch silently falls back to CPU when this is set.
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+# SF3D doesn't ship a setup.py at the repo root — `sf3d` is meant to be
+# imported with the repo on PYTHONPATH (their run.py relies on CWD). Our
+# CLI lives in ~/.scout3d/sf3d/ alongside the cloned stable-fast-3d repo;
+# prepend that repo to sys.path so `from sf3d.system import SF3D` resolves.
+_HERE = Path(__file__).resolve().parent
+_SF3D_REPO = _HERE / "stable-fast-3d"
+if _SF3D_REPO.is_dir() and str(_SF3D_REPO) not in sys.path:
+    sys.path.insert(0, str(_SF3D_REPO))
 
 # ─── Wire-protocol helpers ────────────────────────────────────────────────────
 
