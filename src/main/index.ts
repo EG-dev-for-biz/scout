@@ -33,7 +33,7 @@ function createWindow(): void {
     titleBarStyle: "hiddenInset",
     backgroundColor: "#0f0f11",
     webPreferences: {
-      preload: join(__dirname, "../preload/index.js"),
+      preload: join(__dirname, "../preload/index.mjs"),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
@@ -42,7 +42,20 @@ function createWindow(): void {
 
   win.on("ready-to-show", () => {
     win.show();
+    if (is.dev) win.webContents.openDevTools({ mode: "detach" });
   });
+
+  // Pipe renderer console output to the main process stdout so dev-server
+  // terminal logs surface React/render errors instead of going silent.
+  if (is.dev) {
+    win.webContents.on("console-message", (_e, level, message, line, source) => {
+      const tag = ["LOG", "WARN", "ERROR", "INFO"][level] ?? "?";
+      console.log(`[renderer:${tag}] ${source}:${line}  ${message}`);
+    });
+    win.webContents.on("render-process-gone", (_e, details) => {
+      console.error("[renderer] crashed:", details);
+    });
+  }
 
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url);
