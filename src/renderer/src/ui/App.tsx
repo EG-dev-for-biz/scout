@@ -22,6 +22,7 @@ import { ExposureMeter } from "@/components/ExposureMeter";
 import { FocusPickReticle } from "@/components/FocusReticle";
 import { SetupDrawer } from "@/components/SetupDrawer";
 import { ShotNotesDrawer } from "@/components/ShotNotesDrawer";
+import { ChatPanel, ChatPanelTrigger } from "@/components/ChatPanel";
 import { useAreaStore } from "@/state/areaStore";
 import { useAnnotationStore } from "@/state/annotationStore";
 import { useProjectStore } from "@/state/projectStore";
@@ -52,10 +53,14 @@ function TopBar({
   onNew,
   onOpenRestyle,
   onOpenGenerateObject,
+  chatOpen,
+  onToggleChat,
 }: {
   onNew: () => void;
   onOpenRestyle: () => void;
   onOpenGenerateObject: () => void;
+  chatOpen: boolean;
+  onToggleChat: () => void;
 }) {
   const { thirdMode, firstPerson, setThirdMode, setFirstPerson } = useCarStore();
   const areas = useAreaStore((s) => s.areas);
@@ -133,6 +138,9 @@ function TopBar({
           WebkitAppRegion: "no-drag" as any,
         })}
       >
+        {/* AI Director chat — drives every operator agentically */}
+        <ChatPanelTrigger open={chatOpen} onToggle={onToggleChat} />
+
         {/* AI Restyle (single image preview) */}
         <button
           onClick={onOpenRestyle}
@@ -573,6 +581,7 @@ export default function App() {
   const [pendingPinType, setPendingPinType] = useState<PinType | null>(null);
   const [restyleOpen, setRestyleOpen] = useState(false);
   const [generateObjectOpen, setGenerateObjectOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
   const clearAreas = useAreaStore((s) => s.clearAreas);
   const clearPins = useAnnotationStore((s) => s.clearPins);
@@ -613,6 +622,7 @@ export default function App() {
         useGeneratedObjectStore.getState().selectObject(null);
         setSetupOpen(false);
         setShotsOpen(false);
+        setChatOpen(false);
         return;
       }
 
@@ -701,6 +711,8 @@ export default function App() {
         onNew={handleNew}
         onOpenRestyle={() => setRestyleOpen(true)}
         onOpenGenerateObject={() => setGenerateObjectOpen(true)}
+        chatOpen={chatOpen}
+        onToggleChat={() => setChatOpen((v) => !v)}
       />
 
       {/* Main content area — single viewport, no flex columns. Drawers
@@ -722,6 +734,11 @@ export default function App() {
           onToggleShots={() => setShotsOpen((v) => !v)}
           onRequestPin={handleRequestPin}
         />
+
+        {/* AI Director — slide-out right panel. Lives outside the
+            ViewportFrame so the aspect-ratio letterboxing doesn't
+            clip it. */}
+        <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
       </div>
 
       {/* AI Restyle modal — captures viewport, calls Gemini, shows result */}
