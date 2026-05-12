@@ -166,6 +166,7 @@ function MannequinModel() {
   const { cloned, headBone, footLift } = React.useMemo(() => {
     const c = SkeletonUtils.clone(fbx) as THREE.Object3D;
     let head: THREE.Bone | null = null;
+    const boneNames: string[] = [];
     c.traverse((obj) => {
       // Normalize Mixamo-style bone name variants so AnimationMixer can
       // resolve clip tracks regardless of which export convention the
@@ -175,6 +176,7 @@ function MannequinModel() {
         obj.name = obj.name
           .replace(/^mixamorig:/, "mixamorig")
           .replace(/^mixamorig_/, "mixamorig");
+        boneNames.push(obj.name);
       }
       if ((obj as THREE.Mesh).isMesh) {
         const m = obj as THREE.Mesh;
@@ -189,6 +191,14 @@ function MannequinModel() {
         head = obj as THREE.Bone;
       }
     });
+    // Diagnostic — print the mannequin's bone vocabulary so we can verify
+    // it matches the clip track names. Compare against the "tracks:" log
+    // emitted from the mixer setup below.
+    console.log(
+      `[Mannequin] character bones (${boneNames.length}):`,
+      boneNames.slice(0, 8),
+      boneNames.length > 8 ? "…" : ""
+    );
 
     // Mixamo FBX exports frequently arrive at 100x (cm-authored, with a
     // UnitScaleFactor the loader didn't normalize). If the model looks
@@ -267,6 +277,27 @@ function MannequinModel() {
       map[c.id] = action;
     }
     actionsRef.current = map;
+
+    // Diagnostic — for the first registered clip, print its track names
+    // and how many actually bound to bones. If `bound` is 0 the mixer
+    // silently fails (this is what causes the "frozen in bind pose" bug
+    // when the character's bone names don't match the clip authoring).
+    const firstClipId = Object.keys(map)[0];
+    if (firstClipId) {
+      const action = map[firstClipId];
+      const clip = action.getClip();
+      // PropertyMixer instances live on the AnimationAction once .play()
+      // has been called; their count = number of tracks that resolved.
+      const bound = (action as unknown as { _propertyBindings?: unknown[] })
+        ._propertyBindings?.length ?? 0;
+      console.log(
+        `[Mannequin] clip "${firstClipId}" tracks (${clip.tracks.length}):`,
+        clip.tracks.slice(0, 5).map((t) => t.name),
+        clip.tracks.length > 5 ? "…" : "",
+        `→ bound to ${bound} bones`
+      );
+    }
+
     return () => {
       mixer.stopAllAction();
       mixerRef.current = null;
