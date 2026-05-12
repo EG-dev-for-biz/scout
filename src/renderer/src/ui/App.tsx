@@ -23,6 +23,8 @@ import { FocusPickReticle } from "@/components/FocusReticle";
 import { SetupDrawer } from "@/components/SetupDrawer";
 import { ShotNotesDrawer } from "@/components/ShotNotesDrawer";
 import { ChatPanel, ChatPanelTrigger } from "@/components/ChatPanel";
+import { PromptBar, type PromptBarHandle } from "@/components/PromptBar";
+import type { Message } from "@/ai/messages";
 import { useAreaStore } from "@/state/areaStore";
 import { useAnnotationStore } from "@/state/annotationStore";
 import { useProjectStore } from "@/state/projectStore";
@@ -583,6 +585,13 @@ export default function App() {
   const [generateObjectOpen, setGenerateObjectOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
+  // Shared chat history between the inline PromptBar and the full
+  // ChatPanel. Owning it here means a turn fired from either surface
+  // contributes to the same model conversation. `Message[]` ref over
+  // React state to avoid re-rendering this whole tree on every token.
+  const chatHistoryRef = useRef<Message[]>([]);
+  const promptBarRef = useRef<PromptBarHandle | null>(null);
+
   const clearAreas = useAreaStore((s) => s.clearAreas);
   const clearPins = useAnnotationStore((s) => s.clearPins);
   const resetProject = useProjectStore((s) => s.resetProject);
@@ -623,10 +632,31 @@ export default function App() {
         setSetupOpen(false);
         setShotsOpen(false);
         setChatOpen(false);
+        // PromptBar's own Esc handler manages its dismissal; we hit
+        // .close() here so the global Esc closes the bar from
+        // anywhere, even if focus has wandered off the textarea.
+        promptBarRef.current?.close();
+        return;
+      }
+
+      // Cmd-K / Ctrl-K — summon the prompt bar from anywhere, including
+      // from inside other input fields (the user is invoking the AI on
+      // purpose; we should not gate this on focus).
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        promptBarRef.current?.toggle();
         return;
       }
 
       if (isInput) return;
+
+      // Bare `/` opens the prompt bar (Cursor / Discord pattern). Only
+      // when not typing — the isInput gate above already covers that.
+      if (e.key === "/") {
+        e.preventDefault();
+        promptBarRef.current?.open();
+        return;
+      }
 
       if (e.key === " " || e.code === "Space") {
         e.preventDefault();
@@ -738,7 +768,20 @@ export default function App() {
         {/* AI Director — slide-out right panel. Lives outside the
             ViewportFrame so the aspect-ratio letterboxing doesn't
             clip it. */}
-        <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+        <ChatPanel
+          open={chatOpen}
+          onClose={() => setChatOpen(false)}
+          history={chatHistoryRef}
+        />
+
+        {/* PromptBar — floating Cmd+K input. Shares the same history
+            ref as the ChatPanel so a turn fired here also appears in
+            the model context of the full chat. */}
+        <PromptBar
+          ref={promptBarRef}
+          history={chatHistoryRef}
+          onExpand={() => setChatOpen(true)}
+        />
       </div>
 
       {/* AI Restyle modal — captures viewport, calls Gemini, shows result */}

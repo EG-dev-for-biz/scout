@@ -286,7 +286,7 @@ export function ChatPanel({ open, onClose, history }: ChatPanelProps) {
       setRunning(false);
       abortRef.current = null;
     }
-  }, [input, running]);
+  }, [input, running, historyRef]);
 
   const handleKey = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
