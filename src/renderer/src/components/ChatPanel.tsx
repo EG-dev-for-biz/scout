@@ -148,13 +148,18 @@ function formatResult(value: unknown): string {
 // Chat panel
 // ---------------------------------------------------------------------------
 
-export function ChatPanel({
-  open,
-  onClose,
-}: {
+export interface ChatPanelProps {
   open: boolean;
   onClose: () => void;
-}) {
+  /**
+   * Shared chat history with the prompt bar. Both components push
+   * messages onto this ref so the model sees one continuous
+   * conversation regardless of which surface the user fires from.
+   */
+  history: React.MutableRefObject<Message[]>;
+}
+
+export function ChatPanel({ open, onClose, history }: ChatPanelProps) {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
@@ -167,9 +172,8 @@ export function ChatPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [turns]);
 
-  // Keep a running history for the model. Derived from `turns` so undo
-  // / clear stay coherent.
-  const historyRef = useRef<Message[]>([]);
+  // `history` is owned by the parent so PromptBar + ChatPanel share it.
+  const historyRef = history;
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
@@ -177,7 +181,7 @@ export function ChatPanel({
     setTurns([]);
     setRunning(false);
     historyRef.current = [];
-  }, []);
+  }, [historyRef]);
 
   const send = useCallback(async () => {
     const text = input.trim();
